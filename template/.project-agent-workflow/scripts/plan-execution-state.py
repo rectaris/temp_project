@@ -300,6 +300,24 @@ RESOURCE_EVIDENCE_SOURCES = {
     "external_transcript": "transcript_log",
     "codex_hooks": "hook_event_log",
 }
+REVIEW_VERDICT_PREFIX = "REVIEW-VERDICT:"
+REVIEW_VERDICT_SEVERITIES = ("High", "Medium", "Low")
+TRUNCATED_CONTENT_KEYS = {"head", "length", "sha256", "truncated"}
+# import-codex-transcript.py keeps exactly this many characters of a longer string.
+TRUNCATED_CONTENT_HEAD_LENGTH = 12000
+REVIEW_VERDICT_INSTRUCTIONS = (
+    "Review verdict format. The first non-empty line of your final message must be\n"
+    "exactly one verdict line, with nothing before it. When you report no findings,\n"
+    "that line is:\n"
+    "REVIEW-VERDICT: none\n"
+    "Otherwise it names every finding severity you report, each at most once,\n"
+    "comma-separated without spaces, in the order High, Medium, Low, such as:\n"
+    "REVIEW-VERDICT: High,Low\n"
+    "REVIEW-VERDICT: Medium\n"
+    "Put your findings after the verdict line. Write no other line in the final\n"
+    "message that starts with the verdict prefix, and do not wrap the verdict line\n"
+    "in quotes, backticks or other formatting.\n"
+)
 SESSION_CHECKPOINT_KEYS = {
     "schema_version", "plan_path", "plan_digest", "source_head", "run_id",
     "execution_state", "execution_event_chain_digest", "boundary",
@@ -854,6 +872,119 @@ def review_turn_zero_from_manifest(
         raise StateError(
             "runtime evidence does not observe this review packet at inherited turn zero"
         )
+
+
+def parse_review_verdict_line(line: str) -> tuple[str, ...]:
+    """Return the severities one fixed verdict line states, in canonical order."""
+
+    if not line.startswith(REVIEW_VERDICT_PREFIX + " "):
+        raise StateError(
+            "reviewer final message does not start with a REVIEW-VERDICT line"
+        )
+    body = line[len(REVIEW_VERDICT_PREFIX) + 1:]
+    if body == "none":
+        return ()
+    parts = body.split(",")
+    if any(part not in REVIEW_VERDICT_SEVERITIES for part in parts):
+        raise StateError("reviewer verdict line is not in the fixed grammar")
+    positions = [REVIEW_VERDICT_SEVERITIES.index(part) for part in parts]
+    if positions != sorted(set(positions)):
+        raise StateError(
+            "reviewer verdict severities must appear at most once, in the order "
+            "High, Medium, Low"
+        )
+    return tuple(parts)
+
+
+def review_message_text(content: Any) -> str:
+    """Read one transcript message, unwrapping only the importer's truncation object.
+
+    The importer truncates only strings longer than its head length and keeps
+    exactly that many characters. A reviewer-authored object of that size
+    exceeds the head length itself and is therefore truncated again, so an
+    object that satisfies the size relation cannot be literal reviewer text.
+    """
+
+    candidate = content
+    if isinstance(content, str):
+        try:
+            candidate = json.loads(content)
+        except (ValueError, RecursionError):
+            candidate = content
+    if (
+        isinstance(candidate, dict)
+        and set(candidate) == TRUNCATED_CONTENT_KEYS
+        and candidate["truncated"] is True
+        and isinstance(candidate["head"], str)
+        and len(candidate["head"]) == TRUNCATED_CONTENT_HEAD_LENGTH
+        and type(candidate["length"]) is int
+        and candidate["length"] > TRUNCATED_CONTENT_HEAD_LENGTH
+    ):
+        return candidate["head"]
+    if isinstance(content, str):
+        return content
+    raise StateError("reviewer final message content is not text")
+
+
+def review_verdict_from_manifest(
+    path: Path,
+    reviewer_session_digest: str,
+) -> tuple[str, ...]:
+    """Return the severities the bound reviewer transcript's final message states."""
+
+    observations = resource_observations_from_manifest(path)
+    if observations["root_session_identity"] != {
+        "status": "observed",
+        "digest": reviewer_session_digest,
+    }:
+        raise StateError("reviewer session differs from bound runtime evidence")
+    transcript_digest = observations["evidence_digests"]["external_transcript"]
+    if transcript_digest is None:
+        raise StateError(
+            "staged review requires an observed reviewer transcript bound by the "
+            "review resource manifest"
+        )
+    manifest = read_bounded_json(path, "review resource manifest", outside_repository=False)
+    manifest_field = RESOURCE_EVIDENCE_SOURCES["external_transcript"]
+    declared_path = manifest.get(manifest_field)
+    if not isinstance(declared_path, str):
+        raise StateError(f"review resource manifest does not declare {manifest_field}")
+    evidence = read_bound_resource_evidence(
+        path.resolve().parent, declared_path, "external_transcript", transcript_digest
+    )
+    if source_session_digests(evidence, "external_transcript") != {reviewer_session_digest}:
+        raise StateError("bound reviewer transcript is not attributed to the reviewer session")
+    final_message: dict[str, Any] | None = None
+    for line in evidence.decode("utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except (ValueError, RecursionError) as exc:
+            raise StateError("bound reviewer transcript is invalid JSONL") from exc
+        if (
+            isinstance(record, dict)
+            and record.get("record_type") == "message"
+            and record.get("role") == "assistant"
+        ):
+            final_message = record
+    if final_message is None:
+        raise StateError("bound reviewer transcript contains no assistant message")
+    lines = [
+        line for line in review_message_text(final_message.get("content")).splitlines()
+        if line.strip()
+    ]
+    if not lines:
+        raise StateError("reviewer final message is empty")
+    verdict = parse_review_verdict_line(lines[0])
+    if any(line.lstrip().startswith(REVIEW_VERDICT_PREFIX) for line in lines[1:]):
+        raise StateError("reviewer final message contains more than one verdict line")
+    return verdict
+
+
+def print_review_verdict_instructions(args: argparse.Namespace) -> None:
+    del args
+    sys.stdout.write(REVIEW_VERDICT_INSTRUCTIONS)
 
 
 def validate_resource_observations(value: Any) -> dict[str, Any]:
@@ -6257,12 +6388,34 @@ def record_event(args: argparse.Namespace) -> None:
                 or review_receipt["inherited_turns"] != 0
             ):
                 raise StateError("staged review requires observed zero inherited turns")
+            review_manifest_digest = review_route_manifest_digest(
+                Path(args.review_resource_manifest)
+            )
             review_turn_zero_from_manifest(
                 Path(args.review_resource_manifest),
                 review_receipt["reviewer_session_digest"],
                 review_receipt["packet_digest"],
                 review_receipt["inheritance_evidence_digest"],
             )
+            stated_severities = review_verdict_from_manifest(
+                Path(args.review_resource_manifest),
+                review_receipt["reviewer_session_digest"],
+            )
+            if (
+                review_route_manifest_digest(Path(args.review_resource_manifest))
+                != review_manifest_digest
+            ):
+                raise StateError("review resource manifest changed during verification")
+            if set(severities) != set(stated_severities):
+                stated = ",".join(stated_severities) or "none"
+                recorded = ",".join(
+                    severity for severity in REVIEW_VERDICT_SEVERITIES
+                    if severity in severities
+                ) or "none"
+                raise StateError(
+                    f"recorded finding severities ({recorded}) differ from the bound "
+                    f"reviewer verdict ({stated})"
+                )
             require_lifecycle_identity(
                 state, args.run_id, Path(args.lifecycle_state)
             )
@@ -7275,6 +7428,8 @@ def parser() -> argparse.ArgumentParser:
     probe.add_argument("state")
     probe.add_argument("--run-id", required=True)
     probe.set_defaults(handler=print_review_route_packet)
+    verdict_instructions = sub.add_parser("review-verdict-instructions")
+    verdict_instructions.set_defaults(handler=print_review_verdict_instructions)
     route = sub.add_parser("review-route-check")
     route.add_argument("state")
     route.add_argument("--run-id", required=True)

@@ -53,6 +53,11 @@ def canonical_digest(value: object) -> str:
     return digest(json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 
+def verdict_message(severities: list[str] | None = None) -> str:
+    stated = ",".join(severities or []) or "none"
+    return f"REVIEW-VERDICT: {stated}\nFindings follow.\n"
+
+
 class PlanExecutionStateTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -191,6 +196,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "codex_hooks"
         ] = evidence_digest
         review_manifest.write_text(json.dumps(review_manifest_payload), encoding="utf-8")
+        self.set_review_verdict(review_manifest, verdict_message(finding_severities))
         receipt_payload["inheritance_evidence_digest"] = evidence_digest
         receipt.write_text(json.dumps(receipt_payload), encoding="utf-8")
         identity = STATE_MODULE.review_candidate_identity_digest(
@@ -291,6 +297,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         session: str = "source-session",
         review_packet_digest: str | None = None,
         inherited_turns: int = 0,
+        final_message: str | None = "REVIEW-VERDICT: none\nNo findings.",
     ) -> Path:
         run_dir = self.repo / ".agent-logs" / label
         raw_dir = run_dir / "raw"
@@ -322,6 +329,15 @@ class PlanExecutionStateTest(unittest.TestCase):
             encoding="utf-8",
         )
         evidence_digest = "sha256:" + hashlib.sha256(event_path.read_bytes()).hexdigest()
+        transcript_digest = None
+        if (
+            review_packet_digest is not None
+            and observed_session
+            and final_message is not None
+        ):
+            transcript_digest = self.write_review_transcript(
+                run_dir, label, session, final_message
+            )
         (run_dir / "redaction-report.md").write_text(
             "# Redaction Report\n",
             encoding="utf-8",
@@ -340,6 +356,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "provenance": "deterministic_proxy",
         }
         path = run_dir / "manifest.json"
+        transcript_bound = transcript_digest is not None
         path.write_text(
             json.dumps(
                 {
@@ -347,20 +364,33 @@ class PlanExecutionStateTest(unittest.TestCase):
                     "created_at": "2026-08-23T00:00:00Z",
                     "task": "test resource evidence",
                     "plans": [],
-                    "raw_logs": ["raw/events.jsonl"],
+                    "raw_logs": (
+                        ["raw/events.jsonl", "raw/transcript.jsonl"]
+                        if transcript_bound
+                        else ["raw/events.jsonl"]
+                    ),
                     "artifacts": [],
                     "compressed_outputs": [],
                     "redaction_report": "redaction-report.md",
                     "pinned": False,
-                    "transcript_log": None,
+                    "transcript_log": "raw/transcript.jsonl" if transcript_bound else None,
                     "hook_event_log": "raw/events.jsonl",
                     "coverage": {
-                        "external_transcript": {
-                            "present": False,
-                            "path": None,
-                            "status": "missing",
-                            "redaction_status": "not_applicable",
-                        },
+                        "external_transcript": (
+                            {
+                                "present": True,
+                                "path": "raw/transcript.jsonl",
+                                "status": "present",
+                                "redaction_status": "pending_review",
+                            }
+                            if transcript_bound
+                            else {
+                                "present": False,
+                                "path": None,
+                                "status": "missing",
+                                "redaction_status": "not_applicable",
+                            }
+                        ),
                         "codex_hooks": {
                             "present": True,
                             "path": "raw/events.jsonl",
@@ -368,7 +398,7 @@ class PlanExecutionStateTest(unittest.TestCase):
                             "redaction_status": "automatic_redaction",
                         },
                     },
-                    "missing_sources": ["external_transcript"],
+                    "missing_sources": [] if transcript_bound else ["external_transcript"],
                     "resource_observations": {
                         "schema_version": 1,
                         "root_session_identity": (
@@ -377,7 +407,7 @@ class PlanExecutionStateTest(unittest.TestCase):
                             else {"status": "not_observed", "digest": None}
                         ),
                         "evidence_digests": {
-                            "external_transcript": None,
+                            "external_transcript": transcript_digest,
                             "codex_hooks": evidence_digest,
                         },
                         "metrics": metrics,
@@ -387,6 +417,86 @@ class PlanExecutionStateTest(unittest.TestCase):
             encoding="utf-8",
         )
         return path
+
+    def write_review_transcript(
+        self,
+        run_dir: Path,
+        run_id: str,
+        session: str,
+        final_message: object,
+        *,
+        extra_records: list[dict[str, object]] | None = None,
+        final_role: str = "assistant",
+    ) -> str:
+        def record(
+            record_type: str, role: str, content: object, metadata: dict[str, object]
+        ) -> dict[str, object]:
+            return {
+                "schema_version": 1,
+                "record_type": record_type,
+                "created_at": "2026-08-23T00:00:02Z",
+                "run_id": run_id,
+                "turn_id": "turn-1",
+                "role": role,
+                "content": content,
+                "metadata": metadata,
+            }
+
+        records = [
+            record("system_event", "system_event", "{}", {"session_id": session}),
+            *(extra_records or []),
+            record("message", final_role, final_message, {"payload_type": "message"}),
+        ]
+        transcript = run_dir / "raw/transcript.jsonl"
+        transcript.write_text(
+            "".join(json.dumps(item, sort_keys=True) + "\n" for item in records),
+            encoding="utf-8",
+        )
+        return digest(transcript.read_bytes())
+
+    def set_review_verdict(
+        self,
+        manifest: Path,
+        final_message: object,
+        *,
+        extra_records: list[dict[str, object]] | None = None,
+        final_role: str = "assistant",
+    ) -> None:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        session = None
+        for line in (manifest.parent / payload["hook_event_log"]).read_text(
+            encoding="utf-8"
+        ).splitlines():
+            session = json.loads(line)["payload"].get("session_id") or session
+        payload["resource_observations"]["evidence_digests"]["external_transcript"] = (
+            self.write_review_transcript(
+                manifest.parent,
+                payload["run_id"],
+                str(session),
+                final_message,
+                extra_records=extra_records,
+                final_role=final_role,
+            )
+        )
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    def unbind_review_transcript(self, manifest: Path) -> None:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        (manifest.parent / "raw/transcript.jsonl").unlink()
+        payload["transcript_log"] = None
+        payload["raw_logs"] = ["raw/events.jsonl"]
+        payload["coverage"]["external_transcript"] = {
+            "present": False,
+            "path": None,
+            "status": "missing",
+            "redaction_status": "not_applicable",
+        }
+        payload["missing_sources"] = ["external_transcript"]
+        payload["resource_observations"]["evidence_digests"]["external_transcript"] = None
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    def set_receipt_verdict(self, receipt: Path, final_message: object) -> None:
+        self.set_review_verdict(self.review_manifests[receipt], final_message)
 
     def test_resource_identity_must_match_bound_runtime_evidence(self) -> None:
         path = self.resource_manifest("forged-identity", session="observed-session")
@@ -1401,6 +1511,255 @@ class PlanExecutionStateTest(unittest.TestCase):
             STATE_MODULE.record_bounded_review(args)
         self.assertEqual(order, ["admit", "spend:group-state.json"])
 
+    def bounded_verdict_review(self, label: str) -> tuple[Path, Path, str, Path]:
+        state, lifecycle, run_id = self.initialize_execution(label, mode="parent_direct")
+        (self.repo / "allowed.txt").write_text(f"{label}\n", encoding="utf-8")
+        receipt = self.review_receipt(label, digest(self.plan.read_text()), round_value=1)
+        return state, lifecycle, run_id, receipt
+
+    def run_verdict_review(
+        self, state: Path, lifecycle: Path, run_id: str, receipt: Path,
+        severities: list[str],
+    ) -> subprocess.CompletedProcess[str]:
+        arguments = [
+            "review", str(state), "--run-id", run_id,
+            "--event-id", f"{run_id}-review", "--implementation-mode", "parent_direct",
+            "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        ]
+        for severity in severities:
+            arguments.extend(("--finding-severity", severity))
+        return self.run_cli(*arguments)
+
+    def test_bounded_review_records_the_severities_the_bound_verdict_states(self) -> None:
+        cases = (
+            ("verdict-none", "REVIEW-VERDICT: none\nNo findings.", []),
+            ("verdict-high-low", "\n\nREVIEW-VERDICT: High,Low\nHigh | a.py:1 | x", ["Low", "High"]),
+            ("verdict-medium", "REVIEW-VERDICT: Medium", ["Medium"]),
+            ("verdict-all", "REVIEW-VERDICT: High,Medium,Low\n", ["High", "Medium", "Low"]),
+        )
+        for label, message, severities in cases:
+            with self.subTest(case=label):
+                state, lifecycle, run_id, receipt = self.bounded_verdict_review(label)
+                self.set_receipt_verdict(receipt, message)
+                result = self.run_verdict_review(state, lifecycle, run_id, receipt, severities)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                recorded = STATE_MODULE.read_state(state)["events"][-1]
+                self.assertTrue(recorded["review_target_digest"])
+                self.assertEqual(sorted(recorded["finding_severities"]), sorted(severities))
+
+    def test_bounded_review_refuses_without_a_matching_bound_verdict(self) -> None:
+        truncated_without_verdict = json.dumps({
+            "head": ("Findings first.\nREVIEW-VERDICT: none\n" + "x" * 12000)[:12000],
+            "length": 20000, "sha256": "0" * 64, "truncated": True,
+        }, sort_keys=True)
+        not_truncation = json.dumps({
+            "head": "REVIEW-VERDICT: none", "length": 20000, "sha256": "0" * 64,
+            "truncated": True, "extra": 1,
+        }, sort_keys=True)
+        literal_truncation = json.dumps({
+            "head": "REVIEW-VERDICT: none", "length": 20000, "sha256": "0" * 64,
+            "truncated": True,
+        }, sort_keys=True)
+        verdict_head = ("REVIEW-VERDICT: none\n" + "x" * 12000)[:12000]
+        short_length = json.dumps({
+            "head": verdict_head, "length": 12000, "sha256": "0" * 64, "truncated": True,
+        }, sort_keys=True)
+        string_length = json.dumps({
+            "head": verdict_head, "length": "20000", "sha256": "0" * 64, "truncated": True,
+        }, sort_keys=True)
+        cases = (
+            ("no-transcript", None, [], {}, "observed reviewer transcript"),
+            ("last-line-only", "Review complete.\nREVIEW-VERDICT: none", [], {},
+             "does not start with a REVIEW-VERDICT line"),
+            ("unordered", "REVIEW-VERDICT: Low,High", ["High", "Low"], {}, "in the order"),
+            ("repeated", "REVIEW-VERDICT: High,High", ["High"], {}, "in the order"),
+            ("spaced", "REVIEW-VERDICT: High, Low", ["High", "Low"], {}, "fixed grammar"),
+            ("lowercase", "REVIEW-VERDICT: medium", ["Medium"], {}, "fixed grammar"),
+            ("empty-list", "REVIEW-VERDICT: ", [], {}, "fixed grammar"),
+            ("no-space", "REVIEW-VERDICT:none", [], {}, "does not start with"),
+            ("formatted", "**REVIEW-VERDICT: none**", [], {}, "does not start with"),
+            ("second-verdict", "REVIEW-VERDICT: none\nREVIEW-VERDICT: High", [], {},
+             "more than one verdict line"),
+            ("empty-message", "  \n\n", [], {}, "final message is empty"),
+            ("non-text", ["REVIEW-VERDICT: none"], [], {}, "not text"),
+            ("no-assistant", "REVIEW-VERDICT: none", [], {"final_role": "user"},
+             "contains no assistant message"),
+            ("earlier-message-only", "Done.", [], {"extra_records": [{
+                "schema_version": 1, "record_type": "message",
+                "created_at": "2026-08-23T00:00:02Z", "run_id": "earlier-message-only-review-runtime",
+                "turn_id": "turn-1", "role": "assistant",
+                "content": "REVIEW-VERDICT: none", "metadata": {},
+            }]}, "does not start with"),
+            ("truncated-head-without-verdict", truncated_without_verdict, [], {},
+             "does not start with"),
+            ("not-a-truncation-object", not_truncation, [], {}, "does not start with"),
+            ("literal-truncation-shape", literal_truncation, [], {}, "does not start with"),
+            ("truncation-length-not-longer", short_length, [], {}, "does not start with"),
+            ("truncation-length-not-integer", string_length, [], {}, "does not start with"),
+            ("deeply-nested-content", "[" * 100000 + "]" * 100000, [], {},
+             "does not start with"),
+            ("adds-severity", "REVIEW-VERDICT: none", ["Medium"], {},
+             r"recorded finding severities \(Medium\) differ from the bound reviewer verdict \(none\)"),
+            ("drops-severity", "REVIEW-VERDICT: High,Low", ["High"], {},
+             r"\(High\) differ from the bound reviewer verdict \(High,Low\)"),
+            ("empty-against-findings", "REVIEW-VERDICT: High", [], {},
+             r"\(none\) differ from the bound reviewer verdict \(High\)"),
+            ("contradicts", "REVIEW-VERDICT: Low", ["Medium"], {}, "differ from the bound"),
+        )
+        for label, message, severities, options, expected in cases:
+            with self.subTest(case=label):
+                state, lifecycle, run_id, receipt = self.bounded_verdict_review(label)
+                manifest = self.review_manifests[receipt]
+                if message is None:
+                    self.unbind_review_transcript(manifest)
+                else:
+                    self.set_review_verdict(manifest, message, **options)
+                before = state.read_bytes()
+                registry_before = self.registry.read_bytes()
+                lifecycle_existed = lifecycle.exists()
+                result = self.run_verdict_review(state, lifecycle, run_id, receipt, severities)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertRegex(result.stderr, expected)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(state.read_bytes(), before)
+                self.assertEqual(self.registry.read_bytes(), registry_before)
+                self.assertEqual(lifecycle.exists(), lifecycle_existed)
+
+    def test_bounded_review_reads_a_truncated_verdict_from_its_retained_head(self) -> None:
+        state, lifecycle, run_id, receipt = self.bounded_verdict_review("truncated-verdict")
+        head = "REVIEW-VERDICT: Medium\n" + "Medium | a.py:1 | finding\n" * 600
+        self.set_receipt_verdict(receipt, json.dumps({
+            "head": head[:12000], "length": 20000, "sha256": "0" * 64, "truncated": True,
+        }, sort_keys=True))
+        result = self.run_verdict_review(state, lifecycle, run_id, receipt, ["Medium"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            STATE_MODULE.read_state(state)["events"][-1]["finding_severities"], ["Medium"]
+        )
+
+    def test_verdict_reading_matches_the_transcript_importer_truncation(self) -> None:
+        importer_dir = ROOT / "template/.project-agent-workflow/scripts"
+        spec = importlib.util.spec_from_file_location(
+            "import_codex_transcript_for_verdict", importer_dir / "import-codex-transcript.py"
+        )
+        assert spec is not None and spec.loader is not None
+        importer = importlib.util.module_from_spec(spec)
+        with mock.patch.object(sys, "path", [str(importer_dir), *sys.path]):
+            spec.loader.exec_module(importer)
+        long_verdict = "REVIEW-VERDICT: Low\n" + "Low | a.py:1 | finding\n" * 1000
+        self.assertEqual(
+            STATE_MODULE.review_message_text(importer.content_text(long_verdict)),
+            long_verdict[:12000],
+        )
+        short_verdict = "REVIEW-VERDICT: Low\nLow | a.py:1 | finding"
+        self.assertEqual(
+            STATE_MODULE.review_message_text(importer.content_text(short_verdict)),
+            short_verdict,
+        )
+        for padding in (0, 13000):
+            forged = json.dumps({
+                "head": ("REVIEW-VERDICT: none\n" + "x" * padding)[:12000] if padding else
+                "REVIEW-VERDICT: none",
+                "length": 20000, "sha256": "0" * 64, "truncated": True,
+            })
+            text = STATE_MODULE.review_message_text(importer.content_text(forged))
+            self.assertTrue(text.startswith("{"))
+            with self.assertRaisesRegex(STATE_MODULE.StateError, "does not start with"):
+                STATE_MODULE.parse_review_verdict_line(text.splitlines()[0])
+
+    def test_refused_verdict_precedes_registry_group_and_ledger_effects(self) -> None:
+        state, lifecycle, run_id, receipt = self.bounded_verdict_review("group-verdict-order")
+        self.set_receipt_verdict(receipt, "REVIEW-VERDICT: none\nNo findings.")
+        group_state = self.base / "group-state.json"
+        group_state.write_text('{"fixture": "group"}\n', encoding="utf-8")
+        before = state.read_bytes()
+        registry_before = self.registry.read_bytes()
+        group_before = group_state.read_bytes()
+        order: list[str] = []
+        args = SimpleNamespace(
+            state=str(state),
+            run_id=run_id,
+            event_id="group-verdict-order",
+            implementation_mode="parent_direct",
+            review_receipt=str(receipt),
+            review_resource_manifest=str(self.review_manifests[receipt]),
+            candidate_manifest=None,
+            predecessor_state=None,
+            predecessor_checkpoint=None,
+            reviewer_registry=str(self.registry),
+            invariant_digest=[digest("one invariant")],
+            finding_severity=["High"],
+            lifecycle_state=str(lifecycle),
+            elapsed_seconds=0.0,
+            group_state=str(group_state),
+        )
+        with (
+            mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo),
+            mock.patch.object(
+                STATE_MODULE,
+                "admit_reviewer_session",
+                side_effect=lambda *args, **kwargs: order.append("admit"),
+            ),
+            mock.patch.object(
+                STATE_MODULE,
+                "spend_group_member_review",
+                side_effect=lambda args: order.append("spend"),
+            ),
+            self.assertRaisesRegex(STATE_MODULE.StateError, "differ from the bound reviewer verdict"),
+        ):
+            STATE_MODULE.record_bounded_review(args)
+        self.assertEqual(order, [])
+        self.assertEqual(state.read_bytes(), before)
+        self.assertEqual(self.registry.read_bytes(), registry_before)
+        self.assertEqual(group_state.read_bytes(), group_before)
+
+    def test_bounded_review_refuses_a_manifest_changed_during_verdict_reading(self) -> None:
+        state, lifecycle, run_id, receipt = self.bounded_verdict_review("changed-verdict-manifest")
+        manifest = self.review_manifests[receipt]
+        before = state.read_bytes()
+        registry_before = self.registry.read_bytes()
+        original = STATE_MODULE.review_verdict_from_manifest
+
+        def read_then_change(path: Path, session_digest: str) -> tuple[str, ...]:
+            verdict = original(path, session_digest)
+            manifest.write_text(manifest.read_text(encoding="utf-8") + " ", encoding="utf-8")
+            return verdict
+
+        args = SimpleNamespace(
+            state=str(state), run_id=run_id, event_id="changed-verdict-manifest",
+            implementation_mode="parent_direct", review_receipt=str(receipt),
+            review_resource_manifest=str(manifest), candidate_manifest=None,
+            predecessor_state=None, predecessor_checkpoint=None,
+            reviewer_registry=str(self.registry),
+            invariant_digest=[digest("one invariant")], finding_severity=[],
+            lifecycle_state=str(lifecycle), elapsed_seconds=0.0, group_state=None,
+        )
+        with (
+            mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo),
+            mock.patch.object(
+                STATE_MODULE, "review_verdict_from_manifest", side_effect=read_then_change
+            ),
+            self.assertRaisesRegex(STATE_MODULE.StateError, "changed during verification"),
+        ):
+            STATE_MODULE.record_bounded_review(args)
+        self.assertEqual(state.read_bytes(), before)
+        self.assertEqual(self.registry.read_bytes(), registry_before)
+
+    def test_review_verdict_instructions_print_only_parseable_verdict_lines(self) -> None:
+        result = self.run_cli("review-verdict-instructions", check=True)
+        self.assertEqual(result.stdout, STATE_MODULE.REVIEW_VERDICT_INSTRUCTIONS)
+        lines = result.stdout.splitlines()
+        self.assertFalse(any(line.startswith("ReviewPacket:") for line in lines))
+        examples = [line for line in lines if line.startswith("REVIEW-VERDICT")]
+        self.assertGreaterEqual(len(examples), 2)
+        self.assertIn("REVIEW-VERDICT: none", examples)
+        for line in examples:
+            STATE_MODULE.parse_review_verdict_line(line)
+        self.assertFalse(any("REVIEW-VERDICT" in line for line in lines if line not in examples))
+
     def staged_parent_review_fixture(
         self, state: Path, lifecycle: Path, label: str, *,
         medium: bool = False, session: str | None = None, check: bool = True,
@@ -1435,6 +1794,8 @@ class PlanExecutionStateTest(unittest.TestCase):
             label, payload["plan_digest"], round_value=STATE_MODULE.formal_review_count(payload) + 1,
             reviewer_session=session, source_head=payload["source_head"],
         )
+        if medium:
+            self.set_receipt_verdict(receipt, verdict_message(["Medium"]))
         return self.run_cli(
             "review", str(state), "--run-id", payload["run_id"], "--event-id", label,
             "--implementation-mode", "parent_direct", "--review-receipt", str(receipt),
@@ -2752,6 +3113,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             ]
             for severity in severities:
                 arguments.extend(("--finding-severity", severity))
+            self.set_receipt_verdict(receipt, verdict_message(severities))
             reviewed = self.run_cli(*arguments)
             self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
         stopped_bytes = state.read_bytes()
@@ -3109,6 +3471,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         second_receipt = self.review_receipt(
             "continuation-child-review-2", plan_digest, round_value=2
         )
+        self.set_receipt_verdict(second_receipt, verdict_message(["Medium"]))
         second_review = self.run_cli(
             "review", str(child), "--run-id", child_run,
             "--event-id", "continuation-child-review-2",
@@ -3197,6 +3560,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "continuation-one-review", plan_digest,
             round_value=1, review_target=target,
         )
+        self.set_receipt_verdict(receipt, verdict_message(["Medium"]))
         reviewed = self.run_cli(
             "review", str(state), "--run-id", run_id,
             "--event-id", "continuation-one-review",
@@ -4180,6 +4544,29 @@ class PlanExecutionStateTest(unittest.TestCase):
                         state, lifecycle, run_id, "checked-attempt"
                     )
                     self.assertEqual(started.returncode, 0, started.stderr)
+
+    def test_review_route_check_accepts_probe_evidence_without_a_verdict(self) -> None:
+        for variant in ("no-transcript", "probe-reply", "default-fixture"):
+            with self.subTest(variant=variant):
+                label = f"route-evidence-{variant}"
+                state, lifecycle, run_id = self.initialize_execution(
+                    label, mode="parent_direct", require_preflight=True
+                )
+                packet = STATE_MODULE.review_route_probe_packet(STATE_MODULE.read_state(state))
+                manifest = self.resource_manifest(
+                    label, session=label,
+                    review_packet_digest=STATE_MODULE.canonical_digest(packet),
+                )
+                if variant == "no-transcript":
+                    self.unbind_review_transcript(manifest)
+                elif variant == "probe-reply":
+                    self.set_review_verdict(manifest, "ok")
+                registry_before = self.registry.read_bytes()
+                result = self.record_route(state, run_id, manifest, label)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = STATE_MODULE.read_state(state)
+                self.assertEqual(payload["events"][-1]["event_type"], "review_route_checked")
+                self.assertEqual(self.registry.read_bytes(), registry_before)
 
     def test_invalid_route_probe_leaves_no_check_or_registry_effect(self) -> None:
         state, lifecycle, run_id = self.initialize_execution(
