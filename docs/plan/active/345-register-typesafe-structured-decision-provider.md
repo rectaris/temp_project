@@ -1,13 +1,14 @@
 # Register TypeSafe structured decisions as a root external service with a parent-held credential
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: Every TypeSafe call is authorized per request as a read with the ordinary effect against the unchanged root policy, its credential never reaches a repository file, plan, log, fixture, provider payload, or delegated process, and no advisory score can relax an existing deterministic check.
 task_types:
   - security
   - external_services
 review_class: C
 human_design_required: yes
-human_approval_status: pending
+human_approval_status: approved
 implementation_tier: 2
 implementation_risk: high
 implementation_ambiguity: ordinary
@@ -89,3 +90,7 @@ checked_summary_ja: TypeSafeの構造化判断をルート外部サービスと�
 ## Validation Notes
 
 - Pre-activation review at d61b41e: the version-2 checker ignores the service map, so the original plan's claim that opencode_go already fixes its tuple at the entrypoint was documentation only. The TypeSafe endpoint and model naming come from public TypeSafe documentation and integrations; confirm them against the provider's own documentation before implementation.
+- Owner instruction 2026-09-26, 「@docs/plan/backlog/345-register-typesafe-structured-decision-provider.md について実装作業をせよ。」, approved registering TypeSafe and promoted this plan to active. The approval covers the provider choice only; the tuple stays as the Decisions fix it.
+- implementation_risk is high, and the write scope includes validation authority under scripts/ and tests/, so scripts/run-sandboxed-plan-worker.py refuses this plan. It runs parent_direct in its task-bound worktree with a parent-owned execution ledger, review-route check and adversarial preflight before the first product edit.
+- Probes rerun at dev 9bcaada before any edit: `authorize typesafe read decision.evaluate --target https://api.typesafe.ai/v1/systemone --effect ordinary --provider-configured --task-authorized` exited 0, and `authorize opencode_go write x --target https://example.invalid --effect ordinary --provider-configured --task-authorized` exited 0. The feasibility defect is unchanged.
+- Provider documentation checked 2026-09-26: https://docs.typesafe.ai/api.md states `POST https://api.typesafe.ai/v1/systemone` with `Authorization: Bearer <API_KEY>`; https://docs.typesafe.ai/models.md lists the versioned id `jev-1.13.0` and the moving aliases `jev-latest` and `jev-preview`; https://docs.typesafe.ai/sdk/python/api/constants.md names `TYPESAFE_API_KEY` and a `TYPESAFE_BASE_URL` override. The fixed tuple and the refused aliases match that documentation.
