@@ -1,6 +1,6 @@
 # Create each new task worktree's .venv with uv sync --locked and run root validation through uv run --locked
 
-status: in_progress
+status: checked
 primary_invariant: Every newly prepared task worktree of a project that ships pyproject.toml and uv.lock has its own .venv synced exactly to uv.lock before work starts, validation runs inside that environment, and a sync failure is reported instead of leaving an unprovisioned worktree silently in use.
 task_types:
   - task_worktrees
@@ -83,13 +83,24 @@ checked_summary_ja: 新しいタスクの worktree を作るときに uv sync --
 
 ## Tasks
 
-- [ ] Record the unchanged prepare and worktree test results before product edits.
-- [ ] Add the provisioning step, skip reasons, failure reporting and bounds to both worktree-manager copies.
-- [ ] Add cases with a fake uv for success, missing files, resume, missing uv, sync failure and environment isolation.
-- [ ] State the uv validation rule in AGENTS.md, both references and the root policy checker, and describe provisioning in both SPEC_PLAN_WORKFLOW.md copies.
-- [ ] Obtain independent review through a fresh read-only reviewer, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
+- [x] Record the unchanged prepare and worktree test results before product edits.
+- [x] Add the provisioning step, skip reasons, failure reporting and bounds to both worktree-manager copies.
+- [x] Add cases with a fake uv for success, missing files, resume, missing uv, sync failure and environment isolation.
+- [x] State the uv validation rule in AGENTS.md, both references and the root policy checker, and describe provisioning in both SPEC_PLAN_WORKFLOW.md copies.
+- [x] Obtain independent review through a fresh read-only reviewer, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
 
 ## Validation Notes
 
 - Owner instruction on 2026-09-26 asked to define these environment and workflow changes as rules and to create plans for them: create each task worktree's .venv with uv, let Bubblewrap run the .venv Python, replace the retired gpt-5.3-codex-spark with gpt-5.6-terra medium, fix the check-time plan-id reservations, and approve continuations up to the fourth review once at plan start (option A).
 - standing_continuation_authorization quotes the owner's words of 2026-09-27, given in the plan 421 conversation after it asked twice for continuation approval. The owner then chose to record that approval in the plan file (「2 の計画で作成する。」); plan 424 added the field here.
+- Parent-direct implementation was prepared against source `a49aed4d852d7dc34dcc320c274c1f8bce8e04c0`. `standing-authorization` took the owner's quotation from this plan's `standing_continuation_authorization` line before any review. Each epoch recorded its own runtime-proven read-only route probe and exact-target adversarial preflight. No writable helper was used.
+- Baseline: the root policy and Copier template checks passed before product edits. `python3 tests/test-validation-tools.py` ran 427 tests and failed 15 Ruff-dependent lint cases under the plain system Python, because the fresh task worktree had no environment of its own, and passed with the main checkout's `.venv/bin` first on `PATH`.
+- Standing mode continued each eligible review-budget stop without a new owner message. Formal review 1 recorded High and Medium and stopped epoch 0: a failed sync was not persisted, so a later `prepare` resumed an unprovisioned worktree; `UV_CACHE_DIR` was inherited; and provisioning broke schema-2 member retirement, which refuses ignored files. Derived schema-1 authorization, verified, `continue` opened epoch 1.
+- Formal review 2 recorded High and stopped epoch 1: a partial `.venv` left by a failed or timed-out sync was accepted by its presence, and the retry command could write through a pre-existing `.venv` symbolic link. Derived schema-2 authorization, verified, `continue-final` opened epoch 2.
+- Formal review 3 recorded High and stopped epoch 2: `UV_CONFIG_FILE` and a project `tool.uv.cache-dir` could still redirect the cache. Derived schema-3 authorization, verified, `continue-fourth-review` opened epoch 3.
+- Formal review 4, in a fresh read-only Codex session, reported `REVIEW-VERDICT: none`. No owner resolution was needed; the cumulative four-review maximum was reached, not exceeded.
+- Final behavior: `prepare`, and likewise the explicit `create`, run `uv sync --locked --no-python-downloads` in a new checkout that carries both `pyproject.toml` and `uv.lock`. The sync removes the inherited environment, project and cache selection and passes an explicit `--cache-dir` naming the default user cache, which `uv --no-config cache dir` resolves. `prepare` and `resume` accept an existing uv-locked worktree only after the read-only `uv sync --locked --check` passes. Schema-2 member worktrees are skipped with a stated reason. The retry command refuses a `.venv` symbolic link.
+- Regression proof: ten new worktree cases failed against the source-baseline manager (4 failures, 6 errors) and pass now. The schema-2 member case passes on the baseline, which never provisions, and failed when the member skip was disabled. Removing a provisioning marker from the generated specification, or reverting a release-flow step to the bare command, made the root policy checker fail. Throwaway adversarial harnesses passed 14 cases against the final code, including a real-uv partial environment, a real-uv cache redirection through `UV_CACHE_DIR`, `UV_CONFIG_FILE` and `tool.uv.cache-dir`, the retry-command symlink refusal, process-group kill on timeout and interrupt, and a JSON-only stdout. Real-uv smokes in the root repository synced a fresh direct-task worktree with Ruff 0.15.7, refused its resume after a package's metadata was removed, cleared the refusal through the reported retry command, and retired both smoke worktrees.
+- Focused validation passed through `uv run --locked` in this worktree: `python3 tests/test-validation-tools.py` (438 tests), `python3 scripts/check-root-agent-policy.py` and `python3 scripts/check-copier-template.py`. Authoritative `scripts/lint-project-workflow.sh` and `tests/smoke.sh` each ran once through `uv run --locked` after the clearing review and passed. The completion and archive execution gates passed before the implementation commit.
+- `check-copier-template.py` proves the byte identity of both worktree-manager copies. The provisioning description in both specification copies is asserted by `check-root-agent-policy.py`, because the template checker was outside this plan's write scope.
+- Accepted implementation commit: `d3fea4b`. External ledgers, standing and derived authorizations, receipts, review evidence and validation output are retained under `~/.local/state/project-agent-workflow/plan-422-20260927/`. Link changes: none.
