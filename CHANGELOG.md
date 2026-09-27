@@ -2,6 +2,12 @@
 
 ## 未リリース
 
+- プラン開始時の一度の承認で、同じプランの4回目のレビューまで続行できるようにした。
+  `standing-authorization` は最初の正式レビュー前に承認をプランと実行開始記録へ結び付ける。
+  続行のたびに `derive-authorization` で個別の認可と派生記録を作り、`verify-authorization` で対応を確認する。
+  レビューの累計上限は4回のままで、4回目の停止後には新しいオーナー判断が必要になる。
+  事前承認を記録しない場合や、続行条件を満たさない停止の扱いは変わらない。
+
 - 作業の依頼先を、能力の名前から解決するようにしました。
   管理対象の Capability Registry（`.project-agent-workflow/docs/agent/capability-registry.json`）が、`repository_exploration` や `plan_implementation` などの 6 つの能力を、それぞれ Codex の実装に対応付けます。
   `plan_implementation` はサンドボックス化した計画ランナーに、残りの能力は既存の `.codex/agents` のプロファイルに対応します。

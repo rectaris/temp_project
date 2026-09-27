@@ -3113,6 +3113,28 @@ def check_owner_resolution_boundary() -> None:
         fail("owner acceptance must not be recordable through the generic record command")
     if module.OWNER_ACCEPTANCE_EVENT_KEYS <= module.EVENT_KEYS:
         fail("owner acceptance must carry its own bound evidence keys")
+    if "standing_authorization_recorded" in module.RECORD_EVENT_TYPES:
+        fail("standing authorization must not be recordable through the generic record command")
+    standing_clause = (
+        "A standing authorization given at plan start counts as the owner decision "
+        "for each eligible same-plan continuation up to the fourth review."
+    )
+    for relative in (
+        "AGENTS.md", "template/.project-agent-workflow/AGENTS.md.jinja",
+        "docs/agent/SPEC_PLAN_WORKFLOW.md",
+        "template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md",
+        "references/orchestration.md",
+        "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
+        ".codex/skills/sequential-plan-orchestrator/SKILL.md",
+        "template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md",
+    ):
+        policy = read(relative)
+        for marker in (
+            standing_clause, "standing-authorization", "derive-authorization",
+            "verify-authorization", "`resolve-owner` and `owner-accept` require fresh owner records",
+        ):
+            if marker not in policy:
+                fail(f"{relative} missing standing-authorization rule: {marker}")
 
     source = read("scripts/plan-execution-state.py")
     for marker in (

@@ -139,6 +139,7 @@ EVENT_TYPES = {
     # which keeps existing ledgers valid without an event schema migration.
     "required_evidence_reserved",
     "owner_acceptance",
+    "standing_authorization_recorded",
 }
 RECORD_EVENT_TYPES = EVENT_TYPES - {
     "writable_attempt_started",
@@ -148,6 +149,7 @@ RECORD_EVENT_TYPES = EVENT_TYPES - {
     "review_route_checked",
     "required_evidence_reserved",
     "owner_acceptance",
+    "standing_authorization_recorded",
 }
 EXACT_KEYS = {
     "schema_version", "run_id", "plan_path", "plan_digest", "source_head",
@@ -2609,6 +2611,23 @@ def validate_state(value: Any) -> dict[str, Any]:
             successor_source and not re.fullmatch(r"[0-9a-f]{40}", successor_source)
         ):
             raise StateError("event has an invalid successor source HEAD")
+        if event["event_type"] == "standing_authorization_recorded":
+            epoch = execution_epoch({"events": validated_events})
+            if (
+                epoch is None or epoch["epoch"] != 0
+                or any(prior["event_type"] in {
+                    "parent_review", "standing_authorization_recorded",
+                } for prior in validated_events)
+                or len(event["invariant_digests"]) != 1
+            ):
+                raise StateError("standing authorization requires one registration before review")
+            envelope = {
+                "sequence", "event_id", "event_type", "implementation_mode",
+                "elapsed_seconds", "monotonic_ns", "previous_event_digest", "event_digest",
+                "invariant_digests",
+            }
+            if set(event) != EVENT_KEYS or any(event[key] for key in EVENT_KEYS - envelope):
+                raise StateError("standing authorization carries unrelated event evidence")
         if event["event_type"] == "review_route_checked":
             if execution_epoch({"events": validated_events}) is None or any(
                 prior["event_type"] == "review_route_checked" for prior in validated_events
@@ -4668,7 +4687,282 @@ def validate_continuation_authorization(
     return value
 
 
-def continue_final_state(args: argparse.Namespace) -> None:
+def continuation_authorization_input(
+    path: Path, proposed: dict[str, Any] | None,
+) -> tuple[dict[str, Any], str]:
+    if proposed is None:
+        return read_private_json(path, "continuation authorization")
+    return proposed, digest(canonical_registry_record(proposed))
+
+
+STANDING_BINDINGS = (
+    "plan_path", "plan_digest", "source_head", "primary_invariant_digest",
+    "implementation_mode",
+)
+STANDING_KEYS = {
+    "schema_version", "record_type", *STANDING_BINDINGS, "owner_authorization",
+    "epoch_zero_genesis_digest", "epoch_zero_state_path_digest",
+    "continuation_registry_identity_digest", "path_digest",
+}
+
+
+def standing_paths(paths: list[Path]) -> None:
+    """Reject aliases, links and lock collisions before any record effect."""
+    canonical = []
+    for path in paths:
+        reject_symlink_ancestors(path, include_target=True)
+        target = path.resolve()
+        require_outside_repository(target, "standing authorization input or output")
+        for candidate in (target, target.with_name(target.name + ".lock")):
+            reject_symlink_ancestors(candidate, include_target=True)
+            if candidate.exists():
+                metadata = candidate.lstat()
+                if (
+                    not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
+                    or stat.S_IMODE(metadata.st_mode) != 0o600
+                ):
+                    raise StateError("standing paths must be single-link mode-0600 files")
+        canonical.append(target)
+    locks = {path.with_name(path.name + ".lock") for path in canonical}
+    if len(set(canonical)) != len(canonical) or set(canonical) & locks:
+        raise StateError("standing authorization paths alias an input or lock")
+
+
+def bounded_owner_quotation(value: Any) -> None:
+    if (
+        not isinstance(value, str) or not value.strip()
+        or len(value.encode("utf-8")) > 400
+        or value.strip().lower() in {"todo", "tbd", "placeholder", "none"}
+    ):
+        raise StateError("standing owner authorization is not bounded")
+
+
+def register_standing_authorization(args: argparse.Namespace) -> None:
+    path, output = Path(args.state), Path(args.output)
+    registry_path = Path(args.continuation_registry)
+    standing_paths([path, output, registry_path])
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        epoch = execution_epoch(state)
+        if (
+            state["run_id"] != args.run_id or state["plan_path"] != args.plan
+            or state["state"] != "active" or epoch is None or epoch["epoch"] != 0
+            or any(event["event_type"] in {
+                "parent_review", "standing_authorization_recorded",
+            } for event in state["events"])
+        ):
+            raise StateError("standing authorization requires the exact unreviewed epoch-zero run")
+        require_repository_baseline(state)
+        bounded_owner_quotation(args.owner_authorization)
+        if output.exists():
+            raise StateError("standing authorization output already exists")
+        with with_lock(registry_path) as registry_lock:
+            fcntl.flock(registry_lock.fileno(), fcntl.LOCK_EX)
+            registry = read_continuation_registry(registry_path)
+            if registry["identity_digest"] != epoch["continuation_registry_identity_digest"]:
+                raise StateError("standing authorization registry differs from epoch zero")
+            record = {
+                "schema_version": 1, "record_type": "standing_continuation_authorization",
+                **{key: state[key] for key in STANDING_BINDINGS},
+                "owner_authorization": args.owner_authorization,
+                "epoch_zero_genesis_digest": state["genesis_digest"],
+                "epoch_zero_state_path_digest": continuation_state_path_digest(path),
+                "continuation_registry_identity_digest": registry["identity_digest"],
+                "path_digest": continuation_state_path_digest(output),
+            }
+            data = canonical_registry_record(record)
+            event = empty_execution_event(
+                state, event_id="standing-authorization",
+                event_type="standing_authorization_recorded",
+            )
+            event["invariant_digests"] = [digest(data)]
+            event["event_digest"] = canonical_digest(event)
+            state["events"].append(event)
+            state["event_chain_digest"] = event["event_digest"]
+            state["last_monotonic_ns"] = event["monotonic_ns"]
+            validate_state(state)
+            # Consume registration before publishing the record. An interrupted
+            # publication stays consumed rather than allowing another quotation.
+            atomic_write(path, state)
+            atomic_write_private_bytes(output, data, create_new=True)
+
+
+def read_standing_authorization(
+    path: Path, origin_path: Path, registry_path: Path,
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
+    standing, standing_digest = read_private_json(path, "standing authorization")
+    origin = read_state(origin_path)
+    epoch = execution_epoch(origin)
+    if (
+        set(standing) != STANDING_KEYS
+        or type(standing["schema_version"]) is not int or standing["schema_version"] != 1
+        or standing["record_type"] != "standing_continuation_authorization"
+        or epoch is None or epoch["epoch"] != 0
+        or any(standing[key] != origin[key] for key in STANDING_BINDINGS)
+        or standing["epoch_zero_genesis_digest"] != origin["genesis_digest"]
+        or standing["epoch_zero_state_path_digest"] != continuation_state_path_digest(origin_path)
+        or standing["path_digest"] != continuation_state_path_digest(path)
+        or standing["continuation_registry_identity_digest"]
+        != epoch["continuation_registry_identity_digest"]
+        or read_continuation_registry(registry_path)["identity_digest"]
+        != standing["continuation_registry_identity_digest"]
+    ):
+        raise StateError("standing authorization differs from its plan, genesis or registry")
+    bounded_owner_quotation(standing["owner_authorization"])
+    registered = [
+        event for event in origin["events"]
+        if event["event_type"] == "standing_authorization_recorded"
+    ]
+    if len(registered) != 1 or registered[0]["invariant_digests"] != [standing_digest]:
+        raise StateError("standing authorization lacks its original pre-review registration")
+    return standing, standing_digest, origin
+
+
+def standing_derivation(args: argparse.Namespace, *, verify: bool) -> None:
+    standing_path, origin_path = Path(args.standing_authorization), Path(args.epoch_zero_state)
+    predecessor_path, registry_path = Path(args.predecessor_state), Path(args.continuation_registry)
+    authorization_path, receipt_path = Path(args.authorization), Path(args.receipt)
+    paths = [standing_path, origin_path, registry_path, authorization_path, receipt_path]
+    if predecessor_path != origin_path:
+        paths.append(predecessor_path)
+    paths.extend([Path(args.state), Path(args.lifecycle_state)])
+    if args.epoch_one_state:
+        paths.append(Path(args.epoch_one_state))
+    if args.reviewer_registry:
+        paths.append(Path(args.reviewer_registry))
+    standing_paths(paths)
+    standing, standing_digest, origin = read_standing_authorization(
+        standing_path, origin_path, registry_path,
+    )
+    predecessor, predecessor_digest = read_state_with_digest(
+        predecessor_path, require_canonical=True,
+    )
+    epoch = execution_epoch(predecessor)
+    if (
+        epoch is None or epoch["epoch"] not in (0, 1, 2)
+        or any(predecessor[key] != origin[key] for key in (
+            "plan_path", "plan_digest", "primary_invariant_digest", "implementation_mode",
+        ))
+        or args.plan != origin["plan_path"]
+        or (epoch["epoch"] == 0 and predecessor != origin)
+    ):
+        raise StateError("standing authorization permits only this plan's continuations through epoch three")
+    next_epoch = epoch["epoch"] + 1
+    if (
+        predecessor["state"] != "descope_pending"
+        or predecessor["descope_pending_reason_codes"] != ["parent_remediation_budget_exhausted"]
+        or predecessor["open_attempt_id"]
+        or (next_epoch == 1 and args.source_head != predecessor["source_head"])
+    ):
+        raise StateError("standing authorization requires the exact stopped predecessor and source")
+    if next_epoch > 1 and not args.reviewer_registry:
+        raise StateError("standing terminal derivation requires the reviewer registry")
+    if next_epoch == 3 and not args.epoch_one_state:
+        raise StateError("standing fourth-review derivation requires epoch one")
+    chain = [(origin_path, origin)]
+    if next_epoch == 3:
+        middle_path = Path(args.epoch_one_state)
+        chain.append((middle_path, read_state(middle_path)))
+    if next_epoch > 1:
+        chain.append((predecessor_path, predecessor))
+    registry = read_continuation_registry(registry_path)
+    for index, ((older_path, older), (newer_path, newer)) in enumerate(
+        zip(chain, chain[1:]), start=1,
+    ):
+        newer_epoch = execution_epoch(newer)
+        older_digest = read_state_with_digest(older_path, require_canonical=True)[1]
+        if (
+            newer_epoch is None or newer_epoch["epoch"] != index
+            or newer_epoch["predecessor_state_digest"] != older_digest
+            or newer_epoch["predecessor_run_id"] != older["run_id"]
+            or newer_epoch["predecessor_event_chain_digest"] != older["event_chain_digest"]
+            or newer_epoch["continuation_registry_identity_digest"] != registry["identity_digest"]
+            or not any(
+                event["event_digest"] == newer_epoch["continuation_registry_event_digest"]
+                and event["predecessor_genesis_digest"] == older["genesis_digest"]
+                and event["predecessor_state_digest"] == older_digest
+                and event["predecessor_event_chain_digest"] == older["event_chain_digest"]
+                and event["child_genesis_digest"] == newer["genesis_digest"]
+                and event["child_run_id"] == newer["run_id"]
+                and event["child_state_path_digest"] == continuation_state_path_digest(newer_path)
+                and event["authorization_digest"] == newer_epoch["owner_authorization_digest"]
+                for event in registry["events"]
+            )
+        ):
+            raise StateError("standing authorization does not bind this continuation history")
+    authorization = {
+        "schema_version": next_epoch,
+        **{key: predecessor[key] for key in STANDING_BINDINGS},
+        "source_head": args.source_head,
+        "predecessor_state_digest": predecessor_digest,
+        "predecessor_run_id": predecessor["run_id"],
+        "predecessor_event_chain_digest": predecessor["event_chain_digest"],
+        "next_epoch": next_epoch, "child_run_id": args.run_id,
+        "child_state_path_digest": continuation_state_path_digest(Path(args.state)),
+        "continuation_registry_identity_digest": standing["continuation_registry_identity_digest"],
+        "cumulative_review_limit": MAX_CUMULATIVE_REVIEWS,
+        "owner_authorization": standing["owner_authorization"],
+    }
+    if next_epoch > 1:
+        authorization["predecessor_source_head"] = predecessor["source_head"]
+        authorization["reviewer_registry"] = reviewer_registry_reference(
+            snapshot_reviewer_registry(Path(args.reviewer_registry))
+        )
+    if verify:
+        actual, authorization_digest = read_private_json(authorization_path, "derived authorization")
+        # A registry may grow after derivation; its bound prefix stays valid.
+        if next_epoch > 1:
+            validate_reviewer_registry_reference(
+                actual.get("reviewer_registry"),
+                snapshot_reviewer_registry(Path(args.reviewer_registry)), exact=False,
+            )
+            authorization["reviewer_registry"] = actual["reviewer_registry"]
+        if canonical_registry_record(actual) != canonical_registry_record(authorization):
+            raise StateError("derived authorization differs from its standing record or stopped ledger")
+    else:
+        if authorization_path.exists() or receipt_path.exists():
+            raise StateError("standing derivation output already exists")
+        continuation_args = argparse.Namespace(
+            **vars(args), implementation_mode=predecessor["implementation_mode"],
+            final_continuation=next_epoch > 1, fourth_review_continuation=next_epoch == 3,
+            owner_resolution=False,
+        )
+        handler = continue_final_state if next_epoch > 1 else continue_state
+        handler(continuation_args, proposed_authorization=authorization)
+        authorization_digest = digest(canonical_registry_record(authorization))
+    receipt = {
+        "schema_version": 1, "record_type": "standing_continuation_derivation",
+        "standing_record_digest": standing_digest,
+        "authorization_digest": authorization_digest,
+        "plan_digest": origin["plan_digest"],
+        "epoch_zero_genesis_digest": origin["genesis_digest"],
+        "predecessor_genesis_digest": predecessor["genesis_digest"],
+        "predecessor_state_digest": predecessor_digest, "next_epoch": next_epoch,
+    }
+    if verify:
+        actual_receipt, _ = read_private_json(receipt_path, "standing derivation receipt")
+        if canonical_registry_record(actual_receipt) != canonical_registry_record(receipt):
+            raise StateError("standing derivation receipt differs from its authorization or ledger")
+    else:
+        # Publish evidence first: a partial derivation must grant no authority.
+        atomic_write_private_bytes(receipt_path, canonical_registry_record(receipt), create_new=True)
+        atomic_write_private_bytes(
+            authorization_path, canonical_registry_record(authorization), create_new=True,
+        )
+
+
+def derive_standing_authorization(args: argparse.Namespace) -> None:
+    standing_derivation(args, verify=False)
+
+
+def verify_standing_authorization(args: argparse.Namespace) -> None:
+    standing_derivation(args, verify=True)
+
+
+def continue_final_state(
+    args: argparse.Namespace, *, proposed_authorization: dict[str, Any] | None = None,
+) -> None:
     path = Path(args.state)
     references = (
         args.predecessor_state, args.epoch_zero_state, args.lifecycle_state,
@@ -4708,7 +5002,7 @@ def continue_final_state(args: argparse.Namespace) -> None:
     require_group_execution_permit(args.plan, "execution", args)
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        continue_state(args)
+        continue_state(args, proposed_authorization=proposed_authorization)
 
 
 def bind_continuation_registry_event(state: dict[str, Any], event_digest: str) -> None:
@@ -4729,7 +5023,9 @@ def publish_continuation_state(path: Path, state: dict[str, Any], *, create_new:
     atomic_write(path, state, create_new=create_new)
 
 
-def continue_state(args: argparse.Namespace) -> None:
+def continue_state(
+    args: argparse.Namespace, *, proposed_authorization: dict[str, Any] | None = None,
+) -> None:
     path = Path(args.state)
     predecessor_path = Path(args.predecessor_state)
     lifecycle_path = Path(args.lifecycle_state)
@@ -4825,8 +5121,8 @@ def continue_state(args: argparse.Namespace) -> None:
                     "final continuation requires epoch one with one local review "
                     "and one or two original reviews"
                 )
-            authorization, authorization_digest = read_private_json(
-                authorization_path, "continuation authorization"
+            authorization, authorization_digest = continuation_authorization_input(
+                authorization_path, proposed_authorization
             )
             origin, origin_digest = read_state_with_digest(
                 Path(args.epoch_zero_state), require_canonical=True
@@ -4962,8 +5258,8 @@ def continue_state(args: argparse.Namespace) -> None:
                 ):
                     raise StateError("final continuation registry does not bind the prior continuation")
         if not final:
-            authorization, authorization_digest = read_private_json(
-                authorization_path, "continuation authorization"
+            authorization, authorization_digest = continuation_authorization_input(
+                authorization_path, proposed_authorization
             )
         source_head = predecessor["source_head"]
         checked_authorization = authorization
@@ -5124,6 +5420,17 @@ def continue_state(args: argparse.Namespace) -> None:
                 bind_continuation_registry_event(expected, prior_consumption["event_digest"])
                 if read_state(path) != expected:
                     raise StateError("final continuation destination differs from exact recovery")
+        if proposed_authorization is not None:
+            # Derivation exercises the existing admission predicates but cannot
+            # consume a predecessor or create a child execution.
+            identity = canonical_digest({
+                "plan_digest": predecessor["plan_digest"],
+                "predecessor_run_id": predecessor["run_id"],
+                "predecessor_genesis_digest": predecessor["genesis_digest"],
+            })
+            if identity in registry["consumed"] or path.exists():
+                raise StateError("standing derivation requires an unused child and predecessor")
+            return
         registry_event_digest = consume_continuation_authorization(
             registry_path,
             plan_digest=predecessor["plan_digest"],
@@ -7463,6 +7770,31 @@ def parser() -> argparse.ArgumentParser:
     init.add_argument("--require-adversarial-preflight", action="store_true")
     init.add_argument("--continuation-registry")
     init.set_defaults(handler=init_state)
+    standing = sub.add_parser("standing-authorization")
+    standing.add_argument("state")
+    standing.add_argument("--run-id", required=True)
+    standing.add_argument("--plan", required=True)
+    standing.add_argument("--continuation-registry", required=True)
+    standing.add_argument("--owner-authorization", required=True)
+    standing.add_argument("--output", required=True)
+    standing.set_defaults(handler=register_standing_authorization)
+    for command, handler in (
+        ("derive-authorization", derive_standing_authorization),
+        ("verify-authorization", verify_standing_authorization),
+    ):
+        derivation = sub.add_parser(command)
+        derivation.add_argument("state")
+        for option in (
+            "standing-authorization", "epoch-zero-state", "predecessor-state",
+            "continuation-registry", "authorization", "receipt", "source-head",
+            "run-id", "plan", "lifecycle-state",
+        ):
+            derivation.add_argument("--" + option, required=True)
+        derivation.add_argument("--epoch-one-state")
+        derivation.add_argument("--reviewer-registry")
+        derivation.add_argument("--group-permit")
+        derivation.add_argument("--group-state")
+        derivation.set_defaults(handler=handler)
     continuation = sub.add_parser("continue")
     continuation.add_argument("state")
     continuation.add_argument("--predecessor-state", required=True)

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from contextlib import chdir
 import hashlib
 import fcntl
 import importlib.util
@@ -1804,6 +1805,380 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--lifecycle-state", str(lifecycle),
             *(["--finding-severity", "Medium"] if medium else []), check=check,
         )
+
+    def standing_fixture(self, label: str = "standing") -> dict:
+        origin, lifecycle, run_id = self.initialize_execution(
+            label, mode="parent_direct", require_preflight=True,
+        )
+        standing = self.base / f"{label}-standing.json"
+        registration = [
+            "standing-authorization", str(origin), "--run-id", run_id,
+            "--plan", self.plan.relative_to(self.repo).as_posix(),
+            "--continuation-registry", str(self.continuation_registry),
+            "--owner-authorization", "Continue this exact plan through the fourth review.",
+            "--output", str(standing),
+        ]
+        self.run_cli(*registration, check=True)
+        (self.repo / "allowed.txt").write_text("standing authorization product candidate\n")
+        return {
+            "origin": origin, "lifecycle": lifecycle, "run_id": run_id,
+            "standing": standing, "registration": registration,
+        }
+
+    def standing_arguments(
+        self, fixture: dict, predecessor: Path, epoch: int, middle: Path | None = None,
+    ) -> list[str]:
+        arguments = [
+            "derive-authorization", str(self.base / f"standing-epoch-{epoch}.json"),
+            "--standing-authorization", str(fixture["standing"]),
+            "--epoch-zero-state", str(fixture["origin"]),
+            "--predecessor-state", str(predecessor),
+            "--continuation-registry", str(self.continuation_registry),
+            "--authorization", str(self.base / f"standing-auth-{epoch}.json"),
+            "--receipt", str(self.base / f"standing-receipt-{epoch}.json"),
+            "--source-head", self.head, "--run-id", f"standing-epoch-{epoch}",
+            "--plan", self.plan.relative_to(self.repo).as_posix(),
+            "--lifecycle-state", str(self.base / f"standing-lifecycle-{epoch}.json"),
+        ]
+        if epoch > 1:
+            arguments.extend(["--reviewer-registry", str(self.registry)])
+        if middle is not None:
+            arguments.extend(["--epoch-one-state", str(middle)])
+        return arguments
+
+    def continue_standing(self, arguments: list[str], epoch: int) -> Path:
+        excluded = {"--standing-authorization", "--receipt"}
+        if epoch == 1:
+            excluded |= {"--epoch-zero-state", "--source-head"}
+        command = ["continue" if epoch == 1 else
+                   "continue-final" if epoch == 2 else "continue-fourth-review", arguments[1]]
+        for index in range(2, len(arguments), 2):
+            if arguments[index] not in excluded:
+                command.extend(arguments[index:index + 2])
+        command.extend(["--implementation-mode", "parent_direct"])
+        self.run_cli(*command, check=True)
+        return Path(arguments[1])
+
+    def test_standing_grouped_continuation_requires_live_group_authority(self) -> None:
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://example.invalid/owner/repo.git"],
+            cwd=self.repo, check=True,
+        )
+        members = []
+        for plan, plan_id, scope in (
+            (self.plan, "001", "allowed.txt"), (self.child_plan, "002", "child.txt"),
+        ):
+            plan.write_text(
+                "plan_purpose: implementation\n"
+                + plan.read_text().replace("  - allowed.txt\n", f"  - {scope}\n")
+            )
+            members.append({
+                "plan_id": plan_id, "plan_path": plan.relative_to(self.repo).as_posix(),
+                "plan_digest": digest(plan.read_bytes()),
+                "write_scope_digest": STATE_MODULE.canonical_digest([scope]),
+            })
+        target_ref = subprocess.check_output(
+            ["git", "symbolic-ref", "HEAD"], cwd=self.repo, text=True,
+        ).strip()
+        description = self.repo / "docs/plan/execution-groups/standing.json"
+        description.parent.mkdir()
+        description.write_text(json.dumps({
+            "schema_version": 1, "group_id": "standing", "target_ref": target_ref,
+            "declared_independence": "Separate fixture product files with no shared interface.",
+            "members": members,
+        }))
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "enroll standing fixtures"], cwd=self.repo, check=True)
+        self.head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True,
+        ).strip()
+        group = self.base / "standing-group.json"
+        permit = self.base / "standing-permit.json"
+        for command in (
+            ["group-init", str(group), "--group-description",
+             description.relative_to(self.repo).as_posix(), "--target-ref", target_ref,
+             "--start-commit", self.head],
+            ["permit-issue", str(group), "--member", members[0]["plan_path"],
+             "--permit-id", "standing-permit", "--workspace-digest", digest("standing workspace"),
+             "--output", str(permit)],
+        ):
+            subprocess.run(
+                [sys.executable, str(GROUP_SCRIPT), *command], cwd=self.repo,
+                check=True, capture_output=True, text=True,
+            )
+        authority = ["--group-permit", str(permit), "--group-state", str(group)]
+        run_cli = self.run_cli
+
+        def grouped_cli(*arguments, check=False):
+            extra = authority if arguments[0] in {"init", "review-route-check"} else []
+            return run_cli(*arguments, *extra, check=check)
+
+        self.run_cli = grouped_cli
+        fixture = self.standing_fixture("grouped-standing")
+        self.staged_parent_review_fixture(
+            fixture["origin"], fixture["lifecycle"], "grouped-stop", medium=True,
+        )
+        arguments = self.standing_arguments(fixture, fixture["origin"], 1)
+        before = self.continuation_registry.read_bytes()
+        refused = self.run_cli(*arguments)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertFalse(Path(arguments[arguments.index("--authorization") + 1]).exists())
+        self.assertEqual(self.continuation_registry.read_bytes(), before)
+        arguments.extend(authority)
+        self.run_cli(*arguments, check=True)
+        self.run_cli("verify-authorization", *arguments[1:], check=True)
+        child = self.continue_standing(arguments, 1)
+        self.assertEqual(STATE_MODULE.execution_epoch(STATE_MODULE.read_state(child))["epoch"], 1)
+
+    def test_standing_interrupted_registration_cannot_mint_a_replacement(self) -> None:
+        origin, _, run_id = self.initialize_execution(
+            "standing-interruption", mode="parent_direct", require_preflight=True,
+        )
+        output = self.base / "interrupted-standing.json"
+        arguments = [
+            "standing-authorization", str(origin), "--run-id", run_id,
+            "--plan", self.plan.relative_to(self.repo).as_posix(),
+            "--continuation-registry", str(self.continuation_registry),
+            "--owner-authorization", "Continue this exact plan through the fourth review.",
+            "--output", str(output),
+        ]
+        write_private = STATE_MODULE.atomic_write_private_bytes
+
+        def interrupt_after_publication(*args, **kwargs):
+            write_private(*args, **kwargs)
+            raise OSError("interrupted publication")
+
+        with (
+            mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo),
+            mock.patch.object(
+                STATE_MODULE, "atomic_write_private_bytes", side_effect=interrupt_after_publication,
+            ),
+            self.assertRaisesRegex(OSError, "interrupted publication"),
+        ):
+            STATE_MODULE.register_standing_authorization(
+                STATE_MODULE.parser().parse_args(arguments),
+            )
+        replacement = self.base / "replacement-standing.json"
+        arguments[-1] = str(replacement)
+        refused = self.run_cli(*arguments)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertFalse(replacement.exists())
+        self.assertEqual(
+            sum(event["event_type"] == "standing_authorization_recorded"
+                for event in STATE_MODULE.read_state(origin)["events"]),
+            1,
+        )
+
+    def test_standing_interrupted_derivation_grants_no_continuation(self) -> None:
+        fixture = self.standing_fixture("standing-derivation-interruption")
+        self.staged_parent_review_fixture(
+            fixture["origin"], fixture["lifecycle"], "standing-interrupted-stop", medium=True,
+        )
+        arguments = self.standing_arguments(fixture, fixture["origin"], 1)
+        authorization = Path(arguments[arguments.index("--authorization") + 1])
+        receipt = Path(arguments[arguments.index("--receipt") + 1])
+        write_private = STATE_MODULE.atomic_write_private_bytes
+
+        def interrupt_after_publication(*args, **kwargs):
+            write_private(*args, **kwargs)
+            raise OSError("interrupted publication")
+
+        with (
+            chdir(self.repo),
+            mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo),
+            mock.patch.object(
+                STATE_MODULE, "atomic_write_private_bytes", side_effect=interrupt_after_publication,
+            ),
+            self.assertRaisesRegex(OSError, "interrupted publication"),
+        ):
+            STATE_MODULE.derive_standing_authorization(
+                STATE_MODULE.parser().parse_args(arguments),
+            )
+        self.assertFalse(authorization.exists())
+        self.assertTrue(receipt.exists())
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.continue_standing(arguments, 1)
+        self.assertFalse(Path(arguments[1]).exists())
+
+    def test_standing_registration_is_private_single_and_before_review(self) -> None:
+        fixture = self.standing_fixture()
+        origin, standing = fixture["origin"], fixture["standing"]
+        record = json.loads(standing.read_text())
+        self.assertEqual(standing.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(record["epoch_zero_genesis_digest"], STATE_MODULE.read_state(origin)["genesis_digest"])
+        before = origin.read_bytes()
+        second = list(fixture["registration"])
+        second[-1] = str(self.base / "second-standing.json")
+        self.assertNotEqual(self.run_cli(*second).returncode, 0)
+        self.assertEqual(origin.read_bytes(), before)
+        self.assertFalse(Path(second[-1]).exists())
+        late, lifecycle, run_id = self.initialize_execution(
+            "late-standing", mode="parent_direct", require_preflight=True,
+        )
+        self.staged_parent_review_fixture(late, lifecycle, "late-review")
+        second[1] = str(late)
+        second[second.index("--run-id") + 1] = run_id
+        self.assertNotEqual(self.run_cli(*second).returncode, 0)
+        self.assertFalse(Path(second[-1]).exists())
+
+    def test_standing_registration_refuses_wrong_plan_quote_and_unsafe_output(self) -> None:
+        state, _, run_id = self.initialize_execution(
+            "refused-standing", mode="parent_direct", require_preflight=True,
+        )
+        output = self.base / "refused-standing.json"
+        arguments = [
+            "standing-authorization", str(state), "--run-id", run_id,
+            "--plan", self.plan.relative_to(self.repo).as_posix(),
+            "--continuation-registry", str(self.continuation_registry),
+            "--owner-authorization", "Continue through the fourth review.",
+            "--output", str(output),
+        ]
+        before = state.read_bytes()
+        for option, value in (
+            ("--plan", self.child_plan.relative_to(self.repo).as_posix()),
+            ("--run-id", "another-execution"),
+            ("--owner-authorization", "TODO"),
+            ("--owner-authorization", "x" * 401),
+            ("--output", str(self.repo / "standing.json")),
+            ("--output", str(self.base / ".." / self.base.name / "repo" / "standing.json")),
+            ("--output", str(state)),
+            ("--output", str(state) + ".lock"),
+        ):
+            with self.subTest(option=option, value=value):
+                changed = list(arguments)
+                changed[changed.index(option) + 1] = value
+                self.assertNotEqual(self.run_cli(*changed).returncode, 0)
+                self.assertEqual(state.read_bytes(), before)
+                self.assertFalse(output.exists())
+
+    def test_standing_derivation_refuses_traversal_into_repository(self) -> None:
+        fixture = self.standing_fixture("standing-traversal")
+        self.staged_parent_review_fixture(
+            fixture["origin"], fixture["lifecycle"], "standing-traversal-stop", medium=True,
+        )
+        arguments = self.standing_arguments(fixture, fixture["origin"], 1)
+        before = fixture["origin"].read_bytes(), self.continuation_registry.read_bytes()
+        for option in ("--authorization", "--receipt"):
+            with self.subTest(option=option):
+                inside = self.repo / (option[2:] + ".json")
+                traversal = self.base / ".." / self.base.name / "repo" / inside.name
+                changed = list(arguments)
+                changed[changed.index(option) + 1] = str(traversal)
+                refused = self.run_cli(*changed)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertFalse(inside.exists())
+                self.assertEqual(
+                    (fixture["origin"].read_bytes(), self.continuation_registry.read_bytes()), before,
+                )
+                for output_option in ("--authorization", "--receipt"):
+                    self.assertFalse(Path(arguments[arguments.index(output_option) + 1]).exists())
+
+    def test_standing_derives_three_continuations_but_never_a_fifth_review(self) -> None:
+        fixture = self.standing_fixture()
+        predecessor, lifecycle = fixture["origin"], fixture["lifecycle"]
+        middle = None
+        histories = {}
+        for epoch in (1, 2, 3):
+            self.staged_parent_review_fixture(
+                predecessor, lifecycle, f"standing-review-{epoch}", medium=True,
+            )
+            histories[predecessor] = predecessor.read_bytes()
+            arguments = self.standing_arguments(fixture, predecessor, epoch, middle if epoch == 3 else None)
+            self.run_cli(*arguments, check=True)
+            authorization = Path(arguments[arguments.index("--authorization") + 1])
+            receipt = Path(arguments[arguments.index("--receipt") + 1])
+            self.assertEqual(authorization.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+            auth = json.loads(authorization.read_text())
+            self.assertEqual(auth["schema_version"], epoch)
+            self.assertEqual(auth["owner_authorization"], json.loads(fixture["standing"].read_text())["owner_authorization"])
+            self.run_cli("verify-authorization", *arguments[1:], check=True)
+            predecessor = self.continue_standing(arguments, epoch)
+            self.run_cli("verify-authorization", *arguments[1:], check=True)
+            if epoch == 1:
+                middle = predecessor
+            lifecycle = Path(arguments[arguments.index("--lifecycle-state") + 1])
+            for path, content in histories.items():
+                self.assertEqual(path.read_bytes(), content)
+        self.staged_parent_review_fixture(predecessor, lifecycle, "standing-review-four", medium=True)
+        extra = self.standing_arguments(fixture, predecessor, 4, middle)
+        self.assertNotEqual(self.run_cli(*extra).returncode, 0)
+        self.assertFalse(Path(extra[extra.index("--authorization") + 1]).exists())
+        self.assertEqual(STATE_MODULE.formal_review_count(STATE_MODULE.read_state(predecessor)), 1)
+        self.assertEqual(STATE_MODULE.execution_epoch(STATE_MODULE.read_state(predecessor))["cumulative_review_limit"], 4)
+
+    def test_standing_receipt_refuses_substitutions_and_consumed_predecessor(self) -> None:
+        fixture = self.standing_fixture()
+        self.staged_parent_review_fixture(
+            fixture["origin"], fixture["lifecycle"], "standing-stopped", medium=True,
+        )
+        arguments = self.standing_arguments(fixture, fixture["origin"], 1)
+        self.run_cli(*arguments, check=True)
+        receipt = Path(arguments[arguments.index("--receipt") + 1])
+        original = receipt.read_bytes()
+        for field, value in (
+            ("plan_digest", digest("another plan")),
+            ("epoch_zero_genesis_digest", digest("another genesis")),
+            ("predecessor_genesis_digest", digest("another predecessor")),
+            ("next_epoch", 2),
+            ("authorization_digest", digest("another authorization")),
+            ("schema_version", True),
+        ):
+            with self.subTest(field=field):
+                altered = json.loads(original)
+                altered[field] = value
+                receipt.write_text(json.dumps(altered))
+                self.assertNotEqual(self.run_cli("verify-authorization", *arguments[1:]).returncode, 0)
+        receipt.write_bytes(original)
+        self.continue_standing(arguments, 1)
+        fork = list(arguments)
+        fork[1] = str(self.base / "fork-child.json")
+        for option in ("--authorization", "--receipt"):
+            fork[fork.index(option) + 1] += ".fork"
+        self.assertNotEqual(self.run_cli(*fork).returncode, 0)
+        self.assertFalse(Path(fork[fork.index("--authorization") + 1]).exists())
+        other, _, _ = self.initialize_execution(
+            "foreign-standing", mode="parent_direct", require_preflight=True,
+        )
+        wrong = list(arguments)
+        wrong[wrong.index("--epoch-zero-state") + 1] = str(other)
+        self.assertNotEqual(self.run_cli("verify-authorization", *wrong[1:]).returncode, 0)
+
+    def test_standing_keeps_two_local_review_terminal_refusal(self) -> None:
+        fixture = self.standing_fixture()
+        self.staged_parent_review_fixture(
+            fixture["origin"], fixture["lifecycle"], "standing-origin-stop", medium=True,
+        )
+        first = self.standing_arguments(fixture, fixture["origin"], 1)
+        self.run_cli(*first, check=True)
+        child = self.continue_standing(first, 1)
+        lifecycle = Path(first[first.index("--lifecycle-state") + 1])
+        self.staged_parent_review_fixture(child, lifecycle, "standing-local-clear")
+        self.staged_parent_review_fixture(child, lifecycle, "standing-local-stop", medium=True)
+        arguments = self.standing_arguments(fixture, child, 2)
+        before = self.continuation_registry.read_bytes()
+        refused = self.run_cli(*arguments)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("one local review", refused.stderr)
+        self.assertEqual(self.continuation_registry.read_bytes(), before)
+        self.assertFalse(Path(arguments[arguments.index("--authorization") + 1]).exists())
+
+    def test_standing_record_cannot_substitute_for_fresh_owner_decisions(self) -> None:
+        standing = self.standing_fixture()["standing"]
+        fixture = self.owner_resolution_fixture()
+        arguments = list(fixture["arguments"])
+        arguments[arguments.index("--authorization") + 1] = str(standing)
+        before = self.continuation_registry.read_bytes()
+        self.assertNotEqual(self.run_cli(*arguments).returncode, 0)
+        self.assertEqual(self.continuation_registry.read_bytes(), before)
+        self.run_cli(*fixture["arguments"], check=True)
+        state = fixture["child"]
+        result = self.run_cli(
+            "owner-accept", str(state), "--run-id", STATE_MODULE.read_state(state)["run_id"],
+            "--event-id", "no-standing-owner-accept", "--acceptance", str(standing),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotEqual(STATE_MODULE.read_state(state)["state"], "accepted")
 
     def continuation_authorization_fixture(
         self, state: Path, child: Path, run_id: str, *,
