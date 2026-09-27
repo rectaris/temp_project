@@ -10,7 +10,9 @@ rendered generated-project command over the same portable fixtures.
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -162,7 +164,8 @@ def evidence_payloads(records: list[dict]) -> list[bytes]:
 
     tags: list[str] = []
     for record in records:
-        cell = f"{record['slot']}/{record['case_id']}#{record['repetition']}"
+        key = record["slot"] if "slot" in record else record["configuration_id"]
+        cell = f"{key}/{record['case_id']}#{record['repetition']}"
         tags.append(f"transcript:{cell}")
         if record["quality"]["judgment"] is not None:
             tags.append(f"judgment:{cell}")
@@ -314,6 +317,132 @@ def adoptable_observations(slots: tuple[str, ...] | None = None) -> list[dict]:
                     )
                 )
     return records
+
+
+# Schema-2 fixtures. A named configuration declares every dimension, and its
+# configuration_digest is the canonical digest of those dimensions.
+BASE_DIMENSIONS = {
+    "harness": {"backend": "codex", "runtime": RUNTIME},
+    "declared_model": "model-a",
+    "reasoning_settings": {"supported": True, "effort": "medium"},
+    "instructions": {
+        "instruction_asset_digests": {"AGENTS.md": sha("instructions-current")},
+        "harness_profile_selection_digest": sha("harness-profile:empty"),
+    },
+    "capability_registry_digest": sha("capability-registry:1"),
+    "context_policy": "fresh-session",
+    "tool_policy": "workspace-write",
+    "subagent_topology": "single-agent",
+    "environment_configuration_digest": sha("environment:bwrap-default"),
+}
+
+# One changed value per dimension, keyed by the axis a single change names.
+SINGLE_AXIS_CHANGES = {
+    "model": {"declared_model": "model-b"},
+    "instructions": {
+        "instructions": {
+            "instruction_asset_digests": {"AGENTS.md": sha("instructions-candidate")},
+            "harness_profile_selection_digest": sha("harness-profile:candidate"),
+        }
+    },
+    "harness": {"harness": {"backend": "opencode-go", "runtime": ALTERNATE_RUNTIME}},
+    "context_policy": {"context_policy": "compacted-session"},
+    "tool_policy": {"tool_policy": "read-only"},
+    "subagent_topology": {"subagent_topology": "parent-with-reviewer"},
+    "capability_registry": {"capability_registry_digest": sha("capability-registry:2")},
+    "environment": {"environment_configuration_digest": sha("environment:bwrap-offline")},
+}
+
+
+def dimension_digest(dimensions: dict) -> str:
+    return digest_bytes(json.dumps(dimensions, sort_keys=True, separators=(",", ":")).encode())
+
+
+def named_configuration(configuration_id: str, **changes) -> dict:
+    dimensions = copy.deepcopy(BASE_DIMENSIONS)
+    dimensions.update(copy.deepcopy(changes))
+    return {
+        "configuration_id": configuration_id,
+        "dimensions": dimensions,
+        "configuration_digest": dimension_digest(dimensions),
+    }
+
+
+def named_protocol(
+    configurations: list[dict],
+    comparisons: list[tuple[str, str, str]],
+    **kwargs,
+) -> dict:
+    payload = protocol(**kwargs)
+    del payload["repository_baseline"]
+    payload["schema_version"] = 2
+    payload["configurations"] = configurations
+    payload["comparisons"] = [
+        {"comparison_id": name, "baseline": baseline, "candidate": candidate}
+        for name, baseline, candidate in comparisons
+    ]
+    for entry in payload["cases"]:
+        entry["repository_baseline"] = sha(f"baseline:{entry['case_id']}")
+    return payload
+
+
+def named_observation(configuration: dict, case_id: str, repetition: int, **kwargs) -> dict:
+    """A schema-2 observation that confirms every declared value of its configuration."""
+
+    dimensions = configuration["dimensions"]
+    kwargs.setdefault("model_identity", dimensions["declared_model"])
+    kwargs.setdefault("runtime", dimensions["harness"]["runtime"])
+    kwargs.setdefault("reasoning_effort", dimensions["reasoning_settings"]["effort"])
+    record = observation("old_model_current_instructions", case_id, repetition, **kwargs)
+    del record["slot"]
+    cell = f"{configuration['configuration_id']}/{case_id}#{repetition}"
+    record.update(
+        {
+            "schema_version": 2,
+            "configuration_id": configuration["configuration_id"],
+            "repository_baseline": sha(f"baseline:{case_id}"),
+            "configuration_digest": configuration["configuration_digest"],
+            "evidence_digests": {"external_transcript": sha(f"transcript:{cell}")},
+        }
+    )
+    if record["instruction_loading"]["status"] == "observed":
+        record["instruction_loading"]["effective_instruction_digests"] = dict(
+            dimensions["instructions"]["instruction_asset_digests"]
+        )
+    if record["quality"]["judgment"] is not None:
+        record["quality"]["judgment"]["source_evidence_digest"] = sha(f"judgment:{cell}")
+    return record
+
+
+def named_roster(configurations: list[dict], failing: dict | None = None) -> list[dict]:
+    """Every cell of the roster; ``failing`` maps a configuration id to failing cells."""
+
+    records = []
+    for configuration in configurations:
+        failed = (failing or {}).get(configuration["configuration_id"], set())
+        for case_id in CASE_IDS:
+            for repetition in (1, 2):
+                records.append(
+                    named_observation(
+                        configuration,
+                        case_id,
+                        repetition,
+                        acceptance_result="fail" if (case_id, repetition) in failed else "pass",
+                    )
+                )
+    return records
+
+
+def single_axis_pair(axis: str) -> tuple[dict, list[dict]]:
+    """A pair whose candidate changes one dimension and passes more cells."""
+
+    configurations = [
+        named_configuration("baseline"),
+        named_configuration("candidate", **SINGLE_AXIS_CHANGES[axis]),
+    ]
+    payload = named_protocol(configurations, [(f"{axis}-change", "baseline", "candidate")])
+    records = named_roster(configurations, {"baseline": {("small-fix", 1)}})
+    return payload, records
 
 
 class HarnessComparisonBase(unittest.TestCase):
@@ -1066,6 +1195,474 @@ class DeclaredVersusVerifiedTest(HarnessComparisonBase):
             self.assertIn(marker, result.stdout)
 
 
+class NamedProtocolShapeTest(HarnessComparisonBase):
+    """Schema 2: exact named configurations, recomputed digests, per-case baselines."""
+
+    def test_accepts_two_to_eight_named_configurations(self) -> None:
+        for count, accepted in ((1, False), (2, True), (8, True), (9, False)):
+            configurations = [
+                named_configuration(f"config-{index}", context_policy=f"policy-{index}")
+                for index in range(count)
+            ]
+            comparisons = [("first-pair", "config-0", "config-1")] if count > 1 else [
+                ("first-pair", "config-0", "config-0")
+            ]
+            payload = named_protocol(configurations, comparisons)
+            records = [named_observation(configurations[0], "small-fix", 1)]
+            result = self.run_comparison(
+                payload, records, evidence=[], ordering_evidence=[ORDERING_ATTESTATION]
+            )
+            if accepted:
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads(result.stdout)
+                self.assertEqual(report["coverage"]["expected_cells"], count * 4)
+                self.assertEqual(
+                    report["coverage"]["configurations"], [f"config-{i}" for i in range(count)]
+                )
+            else:
+                self.assertNotEqual(result.returncode, 0, count)
+                self.assertIn("a list of 2 to 8 named configurations", result.stderr)
+
+    def test_configuration_digest_is_recomputed_from_the_dimensions(self) -> None:
+        payload, records = single_axis_pair("model")
+        report = self.report(payload, records, ordering_evidence=[ORDERING_ATTESTATION])
+        declared = report["protocol"]["configurations"][1]
+        self.assertEqual(declared["configuration_digest"], dimension_digest(declared["dimensions"]))
+        # A digest that names anything but its own dimensions rejects the report,
+        # including the schema-1 fixture convention of hashing the slot name.
+        for tampered in (sha("configuration:candidate"), payload["configurations"][0]["configuration_digest"]):
+            changed = copy.deepcopy(payload)
+            changed["configurations"][1]["configuration_digest"] = tampered
+            self.assertIn(
+                "differs from the canonical digest of its dimensions",
+                self.rejection(changed, records, ordering_evidence=[ORDERING_ATTESTATION]),
+            )
+        # Changing a dimension under an unchanged digest is the same mismatch.
+        changed = copy.deepcopy(payload)
+        changed["configurations"][1]["dimensions"]["tool_policy"] = "read-only"
+        self.assertIn(
+            "differs from the canonical digest of its dimensions",
+            self.rejection(changed, records, ordering_evidence=[ORDERING_ATTESTATION]),
+        )
+
+    def test_unknown_keys_reject_the_report_at_every_level(self) -> None:
+        payload, records = single_axis_pair("model")
+
+        def protocol_with(path: tuple) -> dict:
+            changed = copy.deepcopy(payload)
+            target = changed
+            for key in path:
+                target = target[key]
+            target["unexpected"] = True
+            configuration = changed["configurations"][1]
+            configuration["configuration_digest"] = dimension_digest(configuration["dimensions"])
+            return changed
+
+        for path in (
+            (),
+            ("configurations", 1),
+            ("configurations", 1, "dimensions"),
+            ("configurations", 1, "dimensions", "harness"),
+            ("configurations", 1, "dimensions", "instructions"),
+            ("comparisons", 0),
+            ("cases", 0),
+        ):
+            self.assertIn(
+                "invalid exact field shape",
+                self.rejection(
+                    protocol_with(path), records, ordering_evidence=[ORDERING_ATTESTATION]
+                ),
+                path,
+            )
+        changed_records = copy.deepcopy(records)
+        changed_records[0]["unexpected"] = True
+        self.assertIn(
+            "invalid exact field shape",
+            self.rejection(payload, changed_records, ordering_evidence=[ORDERING_ATTESTATION]),
+        )
+        # A schema-2 observation names its configuration, never a schema-1 slot.
+        changed_records = copy.deepcopy(records)
+        changed_records[0]["slot"] = changed_records[0].pop("configuration_id")
+        self.assertIn(
+            "invalid exact field shape",
+            self.rejection(payload, changed_records, ordering_evidence=[ORDERING_ATTESTATION]),
+        )
+
+    def test_rejects_a_duplicate_configuration_id(self) -> None:
+        configurations = [named_configuration("same"), named_configuration("same", tool_policy="read-only")]
+        payload = named_protocol(configurations, [("pair", "same", "same")])
+        message = self.rejection(
+            payload, named_roster(configurations[:1]), ordering_evidence=[ORDERING_ATTESTATION]
+        )
+        self.assertIn("repeats configuration_id: same", message)
+
+    def test_rejects_a_comparison_naming_an_undeclared_configuration(self) -> None:
+        payload, records = single_axis_pair("model")
+        for role in ("baseline", "candidate"):
+            changed = copy.deepcopy(payload)
+            changed["comparisons"][0][role] = "missing"
+            self.assertIn(
+                f"names an undeclared {role} configuration: missing",
+                self.rejection(changed, records, ordering_evidence=[ORDERING_ATTESTATION]),
+            )
+
+    def test_rejects_an_observation_of_an_undeclared_configuration(self) -> None:
+        payload, records = single_axis_pair("model")
+        stranger = named_configuration("stranger", tool_policy="read-only")
+        records.append(named_observation(stranger, "small-fix", 1))
+        self.assertIn(
+            "names a configuration the protocol does not declare: stranger",
+            self.rejection(payload, records, ordering_evidence=[ORDERING_ATTESTATION]),
+        )
+
+    def test_observation_must_repeat_its_own_case_baseline(self) -> None:
+        payload, records = single_axis_pair("model")
+        self.assertNotEqual(
+            payload["cases"][0]["repository_baseline"], payload["cases"][1]["repository_baseline"]
+        )
+        # The other case's baseline is a real protocol baseline, yet it is the
+        # wrong one for this observation.
+        swapped = copy.deepcopy(records)
+        swapped[0]["repository_baseline"] = sha(f"baseline:{swapped[0]['case_id']}")
+        self.report(payload, swapped, ordering_evidence=[ORDERING_ATTESTATION])
+        other_case = next(case_id for case_id in CASE_IDS if case_id != swapped[0]["case_id"])
+        swapped[0]["repository_baseline"] = sha(f"baseline:{other_case}")
+        self.assertIn(
+            "different repository baseline digest",
+            self.rejection(payload, swapped, ordering_evidence=[ORDERING_ATTESTATION]),
+        )
+        # A replica shares its source's configuration digest, so an observation
+        # is bound by its configuration id and that digest together.
+        stale = copy.deepcopy(records)
+        stale[0]["configuration_digest"] = payload["configurations"][1]["configuration_digest"]
+        self.assertIn(
+            "different configuration digest",
+            self.rejection(payload, stale, ordering_evidence=[ORDERING_ATTESTATION]),
+        )
+
+    def test_schema_version_must_be_an_integer(self) -> None:
+        payload, records = single_axis_pair("model")
+        changed = copy.deepcopy(payload)
+        changed["schema_version"] = 2.0
+        self.rejection(changed, records, ordering_evidence=[ORDERING_ATTESTATION])
+        changed_records = copy.deepcopy(records)
+        changed_records[0]["schema_version"] = 2.0
+        self.assertIn(
+            "schema_version must be the integer 2",
+            self.rejection(payload, changed_records, ordering_evidence=[ORDERING_ATTESTATION]),
+        )
+        legacy = protocol()
+        legacy["schema_version"] = True
+        self.assertIn(
+            "schema_version must be the integer 1 or 2",
+            self.rejection(
+                legacy, adoptable_observations(), ordering_evidence=[ORDERING_ATTESTATION]
+            ),
+        )
+
+
+class NamedDimensionClassificationTest(HarnessComparisonBase):
+    """Schema 2: attribute an effect only to the one dimension that differs."""
+
+    def test_each_single_dimension_change_is_its_own_axis(self) -> None:
+        dimension_by_axis = {
+            "model": "declared_model",
+            "instructions": "instructions",
+            "harness": "harness",
+            "context_policy": "context_policy",
+            "tool_policy": "tool_policy",
+            "subagent_topology": "subagent_topology",
+            "capability_registry": "capability_registry_digest",
+            "environment": "environment_configuration_digest",
+        }
+        self.assertEqual(set(dimension_by_axis), set(SINGLE_AXIS_CHANGES))
+        for axis, dimension in dimension_by_axis.items():
+            payload, records = single_axis_pair(axis)
+            report = self.report(payload, records, ordering_evidence=[ORDERING_ATTESTATION])
+            entry = self.comparison(report, f"{axis}-change")
+            self.assertEqual(entry["classification"], "single_axis_effect", axis)
+            self.assertEqual(entry["axis"], axis)
+            self.assertEqual(entry["differing_dimensions"], [dimension], axis)
+            self.assertTrue(entry["axis_isolation"]["isolated"], axis)
+            self.assertEqual(entry["evidence_blockers"], [], axis)
+            self.assertEqual(entry["quality_pass_rate"]["delta"], 0.25, axis)
+            self.assertEqual(entry["recommendation"], "adopt_candidate", axis)
+
+    def test_instruction_axis_keeps_the_instruction_loading_checks(self) -> None:
+        payload, records = single_axis_pair("instructions")
+        for record in records:
+            if record["configuration_id"] == "candidate":
+                record["instruction_loading"]["host_instructions"] = "unknown"
+        entry = self.comparison(
+            self.report(payload, records, ordering_evidence=[ORDERING_ATTESTATION]),
+            "instructions-change",
+        )
+        self.assertIn("unknown_host_instructions", entry["evidence_blockers"])
+        self.assertEqual(entry["recommendation"], "insufficient_evidence")
+        # Unknown host instructions do not block an axis that never moved them.
+        payload, records = single_axis_pair("tool_policy")
+        for record in records:
+            record["instruction_loading"]["host_instructions"] = "unknown"
+        entry = self.comparison(
+            self.report(payload, records, ordering_evidence=[ORDERING_ATTESTATION]),
+            "tool_policy-change",
+        )
+        self.assertEqual(entry["recommendation"], "adopt_candidate")
+
+    def test_a_profile_selection_change_needs_an_observed_instruction_change(self) -> None:
+        # Only the Harness Profile selection digest changes, so the instructions
+        # dimension differs while the loaded assets stay identical.
+        instructions = copy.deepcopy(BASE_DIMENSIONS["instructions"])
+        instructions["harness_profile_selection_digest"] = None
+        configurations = [
+            named_configuration("baseline"),
+            named_configuration("candidate", instructions=instructions),
+        ]
+        payload = named_protocol(configurations, [("selection", "baseline", "candidate")])
+        records = named_roster(configurations, {"baseline": {("small-fix", 1)}})
+        entry = self.comparison(
+            self.report(payload, records, ordering_evidence=[ORDERING_ATTESTATION]), "selection"
+        )
+        self.assertEqual(entry["axis"], "instructions")
+        self.assertIn("instruction_change_not_observed", entry["evidence_blockers"])
+        self.assertEqual(entry["recommendation"], "insufficient_evidence")
+
+    def test_two_differing_dimensions_are_a_configuration_comparison(self) -> None:
+        configurations = [
+            named_configuration("baseline"),
+            named_configuration("candidate", declared_model="model-b", tool_policy="read-only"),
+        ]
+        payload = named_protocol(configurations, [("two-axes", "baseline", "candidate")])
+        records = named_roster(configurations, {"baseline": {("small-fix", 1)}})
+        entry = self.comparison(
+            self.report(payload, records, ordering_evidence=[ORDERING_ATTESTATION]), "two-axes"
+        )
+        self.assertEqual(entry["classification"], "configuration_comparison")
+        self.assertIsNone(entry["axis"])
+        self.assertEqual(entry["differing_dimensions"], ["declared_model", "tool_policy"])
+        self.assertEqual(entry["evidence_blockers"], ["axis_not_isolated"])
+        self.assertEqual(entry["recommendation"], "insufficient_evidence")
+        self.assertFalse(entry["empirical_recommendation_available"])
+
+    def test_differing_reasoning_settings_degrade_to_a_configuration_comparison(self) -> None:
+        for changes in (
+            {"reasoning_settings": {"supported": True, "effort": "high"}},
+            {"reasoning_settings": {"supported": False, "effort": None}},
+            {"reasoning_settings": {"supported": True, "effort": "high"}, "declared_model": "model-b"},
+        ):
+            configurations = [named_configuration("baseline"), named_configuration("candidate", **changes)]
+            payload = named_protocol(configurations, [("reasoning", "baseline", "candidate")])
+            records = named_roster(configurations, {"baseline": {("small-fix", 1)}})
+            entry = self.comparison(
+                self.report(payload, records, ordering_evidence=[ORDERING_ATTESTATION]),
+                "reasoning",
+            )
+            self.assertEqual(entry["classification"], "configuration_comparison", changes)
+            self.assertIn("reasoning_settings", entry["differing_dimensions"])
+            self.assertIn("reasoning settings", entry["axis_isolation"]["reason"])
+            self.assertIn("axis_not_isolated", entry["evidence_blockers"])
+            self.assertEqual(entry["recommendation"], "insufficient_evidence")
+
+    def test_observed_models_must_equal_their_declared_models(self) -> None:
+        # Both sides observed a model, and the two differ as the declarations
+        # do, yet neither observed model is the declared one.
+        payload, records = single_axis_pair("model")
+        for record in records:
+            record["observed_model"]["identity"] = (
+                "model-x" if record["configuration_id"] == "baseline" else "model-y"
+            )
+        entry = self.comparison(
+            self.report(payload, records, ordering_evidence=[ORDERING_ATTESTATION]), "model-change"
+        )
+        self.assertEqual(entry["evidence_blockers"], ["model_identity_not_confirmed"])
+        self.assertEqual(entry["recommendation"], "insufficient_evidence")
+        # On an axis that never moved the model, one cell whose two sides both
+        # observed an undeclared model is enough to withhold the recommendation.
+        payload, records = single_axis_pair("tool_policy")
+        for record in records:
+            if (record["case_id"], record["repetition"]) == ("small-fix", 1):
+                record["observed_model"]["identity"] = "model-z"
+        entry = self.comparison(
+            self.report(payload, records, ordering_evidence=[ORDERING_ATTESTATION]),
+            "tool_policy-change",
+        )
+        self.assertIn("model_identity_not_confirmed", entry["evidence_blockers"])
+        self.assertEqual(entry["recommendation"], "insufficient_evidence")
+
+    def test_observations_that_contradict_the_declared_dimensions_reject(self) -> None:
+        payload, records = single_axis_pair("tool_policy")
+        changed = copy.deepcopy(records)
+        for record in changed:
+            if record["configuration_id"] == "candidate":
+                record["observed_model"]["identity"] = "model-other"
+        self.assertIn(
+            "observed two different models although the declared model is unchanged",
+            self.rejection(payload, changed, ordering_evidence=[ORDERING_ATTESTATION]),
+        )
+        changed = copy.deepcopy(records)
+        for record in changed:
+            if record["configuration_id"] == "candidate":
+                record["observed_runtime"]["cli_version"] = ALTERNATE_RUNTIME["cli_version"]
+        self.assertIn(
+            "observed uncontrolled runtime inputs",
+            self.rejection(payload, changed, ordering_evidence=[ORDERING_ATTESTATION]),
+        )
+        payload, records = single_axis_pair("model")
+        for record in records:
+            if record["configuration_id"] == "candidate":
+                record["observed_model"]["identity"] = "model-a"
+        self.assertIn(
+            "observed the same model although the declared model changes",
+            self.rejection(payload, records, ordering_evidence=[ORDERING_ATTESTATION]),
+        )
+
+
+class NamedReplicationTest(HarnessComparisonBase):
+    """Schema 2: identical configurations compare as a replication only."""
+
+    def replication(self) -> tuple[dict, list[dict]]:
+        configurations = [named_configuration("run-a"), named_configuration("run-b")]
+        payload = named_protocol(configurations, [("replication", "run-a", "run-b")])
+        return payload, named_roster(configurations, {"run-a": {("small-fix", 1)}})
+
+    def test_replication_always_withholds_the_recommendation(self) -> None:
+        payload, records = self.replication()
+        self.assertEqual(
+            payload["configurations"][0]["configuration_digest"],
+            payload["configurations"][1]["configuration_digest"],
+        )
+        entry = self.comparison(
+            self.report(payload, records, ordering_evidence=[ORDERING_ATTESTATION]), "replication"
+        )
+        self.assertEqual(entry["classification"], "replication")
+        self.assertIsNone(entry["axis"])
+        self.assertEqual(entry["differing_dimensions"], [])
+        self.assertFalse(entry["axis_isolation"]["isolated"])
+        # Complete evidence and a better second run still name only the
+        # replication blocker and no adoption outcome.
+        self.assertEqual(entry["quality_pass_rate"]["delta"], 0.25)
+        self.assertEqual(entry["evidence_blockers"], ["replication_comparison"])
+        self.assertEqual(entry["recommendation"], "insufficient_evidence")
+        self.assertFalse(entry["empirical_recommendation_available"])
+
+    def test_replication_states_both_sides_with_their_denominators(self) -> None:
+        payload, records = self.replication()
+        for record in records:
+            if record["configuration_id"] == "run-b" and record["case_id"] == "small-fix":
+                if record["repetition"] == 1:
+                    record.update(
+                        named_observation(
+                            payload["configurations"][1],
+                            "small-fix",
+                            1,
+                            outcome="failed",
+                            quality_observed=False,
+                        )
+                    )
+                else:
+                    record["elapsed_seconds"] = {"status": "not_observed", "value": None}
+        entry = self.comparison(
+            self.report(payload, records, ordering_evidence=[ORDERING_ATTESTATION]), "replication"
+        )
+        baseline = entry["sides"]["baseline"]
+        candidate = entry["sides"]["candidate"]
+        self.assertEqual(baseline["configuration_id"], "run-a")
+        self.assertEqual(baseline["outcomes"]["completed"], 4)
+        self.assertEqual((baseline["quality_pass_count"], baseline["quality_denominator"]), (3, 4))
+        self.assertEqual(candidate["configuration_id"], "run-b")
+        self.assertEqual(candidate["outcomes"]["failed"], 1)
+        self.assertEqual((candidate["quality_pass_count"], candidate["quality_denominator"]), (3, 4))
+        self.assertEqual(
+            (
+                candidate["elapsed_seconds_all_runs"]["observation_count"],
+                candidate["elapsed_seconds_all_runs"]["denominator"],
+            ),
+            (3, 4),
+        )
+        self.assertEqual(
+            (
+                candidate["elapsed_seconds_completed_runs"]["observation_count"],
+                candidate["elapsed_seconds_completed_runs"]["denominator"],
+            ),
+            (2, 3),
+        )
+        self.assertIn("replication_comparison", entry["evidence_blockers"])
+        self.assertEqual(entry["recommendation"], "insufficient_evidence")
+
+    def test_candidate_critical_violation_still_blocks_a_replication(self) -> None:
+        payload, records = self.replication()
+        records[-1]["critical_violation"] = True
+        entry = self.comparison(
+            self.report(payload, records, ordering_evidence=[ORDERING_ATTESTATION]), "replication"
+        )
+        self.assertEqual(entry["recommendation"], "blocked_critical_failure")
+        self.assertFalse(entry["empirical_recommendation_available"])
+
+    def test_text_report_names_the_replication_and_both_sides(self) -> None:
+        payload, records = self.replication()
+        result = self.run_comparison(
+            payload, records, ordering_evidence=[ORDERING_ATTESTATION], fmt="text"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for marker in (
+            "# Named configuration comparison",
+            "- replication: replication (run-a -> run-b)",
+            "differing_dimensions: none",
+            "baseline run-a: completed=4 failed=0 timed_out=0 model_unavailable=0 quality=3/4",
+            "candidate run-b: completed=4 failed=0 timed_out=0 model_unavailable=0 quality=4/4",
+            "evidence_blockers: ['replication_comparison']",
+            "recommendation: insufficient_evidence",
+        ):
+            self.assertIn(marker, result.stdout)
+
+
+class MixedSchemaTest(HarnessComparisonBase):
+    """One report judges one schema, and Harness Profile adoption stays schema 1."""
+
+    def test_schema_1_protocol_rejects_a_schema_2_observation(self) -> None:
+        records = adoptable_observations()
+        configuration = named_configuration("new_model_current_instructions")
+        records[0] = named_observation(configuration, "small-fix", 1)
+        self.assertIn(
+            "schema_version 2 cannot be judged against a schema-1 comparison protocol",
+            self.rejection(protocol(), records, ordering_evidence=[ORDERING_ATTESTATION]),
+        )
+
+    def test_schema_2_protocol_rejects_a_schema_1_observation(self) -> None:
+        payload, records = single_axis_pair("model")
+        records[0] = observation("old_model_current_instructions", "small-fix", 1)
+        self.assertIn(
+            "schema_version must be the integer 2 to match the schema-2 comparison protocol",
+            self.rejection(payload, records, ordering_evidence=[ORDERING_ATTESTATION]),
+        )
+
+    def test_schema_2_protocol_never_satisfies_the_harness_profile_binding(self) -> None:
+        path = ROOT / "template/.project-agent-workflow/scripts/check-harness-profile.py"
+        spec = importlib.util.spec_from_file_location("check_harness_profile_under_test", path)
+        assert spec is not None and spec.loader is not None
+        profiles = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(profiles)
+        # Configuration ids that reuse the schema-1 slot names still do not
+        # expose the flat instruction assets that profile adoption binds.
+        configurations = [
+            named_configuration("new_model_current_instructions"),
+            named_configuration(
+                "new_model_candidate_instructions", **SINGLE_AXIS_CHANGES["instructions"]
+            ),
+        ]
+        payload = named_protocol(
+            configurations,
+            [("instruction_effect", "new_model_current_instructions", "new_model_candidate_instructions")],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            protocol_path = Path(tmp) / "protocol.json"
+            protocol_path.write_text(json.dumps(payload), encoding="utf-8")
+            parsed = profiles.load_comparison().parse_protocol(str(protocol_path))
+        with self.assertRaises(profiles.ProfileError):
+            profiles.require_profile_comparison_binding(parsed, [], [])
+
+
+
 class GeneratedProjectParityTest(HarnessComparisonBase):
     """Completion condition 4: root and generated parity with narrow routing."""
 
@@ -1122,6 +1719,49 @@ class GeneratedProjectParityTest(HarnessComparisonBase):
         self.assertEqual(root_result.returncode, 1)
         self.assertEqual(generated_result.returncode, 1)
         self.assertEqual(root_result.stderr, generated_result.stderr)
+
+    def test_root_wrapper_and_rendered_generated_command_agree_on_schema_2(self) -> None:
+        configurations = [
+            named_configuration("run-a"),
+            named_configuration("run-b"),
+            named_configuration("candidate", declared_model="model-b"),
+        ]
+        payload = named_protocol(
+            configurations,
+            [("replication", "run-a", "run-b"), ("model-change", "run-a", "candidate")],
+        )
+        records = named_roster(configurations, {"run-a": {("small-fix", 1)}})
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "generated-project"
+            project.mkdir()
+            self.render_generated_command(project)
+            for fmt in ("json", "text"):
+                root_result = self.run_comparison(
+                    payload,
+                    records,
+                    ordering_evidence=[ORDERING_ATTESTATION],
+                    fmt=fmt,
+                    command=ROOT_COMMAND,
+                    cwd=ROOT,
+                )
+                generated_result = self.run_comparison(
+                    payload,
+                    records,
+                    ordering_evidence=[ORDERING_ATTESTATION],
+                    fmt=fmt,
+                    command=Path(GENERATED_RELATIVE),
+                    cwd=project,
+                )
+                self.assertEqual(root_result.returncode, 0, root_result.stderr)
+                self.assertEqual(generated_result.returncode, 0, generated_result.stderr)
+                self.assertEqual(root_result.stdout, generated_result.stdout, fmt)
+                if fmt == "json":
+                    report = json.loads(root_result.stdout)
+        self.assertEqual(report["report_kind"], "named_configuration_comparison")
+        self.assertEqual(
+            [entry["classification"] for entry in report["comparisons"]],
+            ["replication", "single_axis_effect"],
+        )
 
     def test_root_wrapper_delegates_to_the_template_implementation(self) -> None:
         wrapper = ROOT_COMMAND.read_text(encoding="utf-8")
@@ -1224,6 +1864,10 @@ def build_suite(generated_only: bool) -> unittest.TestSuite:
         ControlledInputTest,
         EvidenceAndFailureTest,
         DeclaredVersusVerifiedTest,
+        NamedProtocolShapeTest,
+        NamedDimensionClassificationTest,
+        NamedReplicationTest,
+        MixedSchemaTest,
         GeneratedProjectParityTest,
     ):
         suite.addTests(loader.loadTestsFromTestCase(case_class))

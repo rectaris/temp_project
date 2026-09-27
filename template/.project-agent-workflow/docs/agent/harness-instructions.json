@@ -5,7 +5,7 @@
       "id": "harness-evaluation-policy",
       "revision": "v1",
       "path": ".project-agent-workflow/docs/agent/SPEC_HARNESS_EVALUATION.md",
-      "content_digest": "sha256:04fae67c4565c3d7001c1380bfda05fac999fdc8b73bfef43c567c460a9edcbf",
+      "content_digest": "sha256:db7fe54dd6f2ec5bfb456fe7c1f792cd88ae14087463e5a3ed1c678e6c09f450",
       "rationale": "This policy governs evidence-bound harness comparison and remains outside optional supplemental selection."
     },
     {

@@ -51,6 +51,8 @@ PYTHON_SCRIPT_ARGUMENTS = {
     "tests/test-sandboxed-plan-worker.py": {()},
     "tests/test-copier-migration.py": {()},
     "tests/test-validation-tools.py": {()},
+    "tests/test-harness-comparison.py": {(), ("--generated",)},
+    "tests/test-harness-profiles.py": {()},
     "tests/test-referent-contract.py": {()},
     "tests/test-hooks.py": {()},
     "tests/test-verify-copier-update.py": {()},

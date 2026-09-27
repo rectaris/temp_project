@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Compare paired local harness runs for one model or instruction change.
+"""Compare paired local harness runs for declared configuration changes.
+
+Schema 1 compares three fixed slots for one model or instruction change. Schema
+2 compares named configurations and classifies each declared pair by the exact
+set of dimensions that differ between its two sides.
 
 The report is advisory derived information. It reads only the files named on the
 command line, never discovers a run, never launches a model, never contacts a
@@ -37,6 +41,13 @@ MAX_REPETITIONS = 64
 REPORT_SCHEMA_VERSION = 1
 COMPARISON_PROTOCOL_SCHEMA_VERSION = 1
 RUN_OBSERVATION_SCHEMA_VERSION = 1
+NAMED_SCHEMA_VERSION = 2
+
+MIN_NAMED_CONFIGURATIONS = 2
+MAX_NAMED_CONFIGURATIONS = 8
+# A configuration id is part of every cell label, so it may not contain the
+# "/" and "#" separators that the label places around the case and repetition.
+CONFIGURATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
@@ -67,6 +78,23 @@ JUDGMENT_KINDS = ADMISSIBLE_JUDGMENT_KINDS + ("agent_self_report",)
 
 ELAPSED_BOUNDARY = "task_start_to_terminal_outcome"
 COST_BOUNDARY = "directly_recorded_billed_amount"
+
+# Schema-2 dimensions in report order, each with the single axis it names when
+# it is the only dimension that differs. Reasoning settings name no axis: a pair
+# that differs in them is always a configuration comparison, as in schema 1.
+DIMENSIONS = (
+    ("declared_model", "model"),
+    ("instructions", "instructions"),
+    ("harness", "harness"),
+    ("context_policy", "context_policy"),
+    ("tool_policy", "tool_policy"),
+    ("subagent_topology", "subagent_topology"),
+    ("capability_registry_digest", "capability_registry"),
+    ("environment_configuration_digest", "environment"),
+    ("reasoning_settings", None),
+)
+DIMENSION_KEYS = {name for name, _axis in DIMENSIONS}
+REPLICATION_BLOCKER = "replication_comparison"
 
 PROTOCOL_KEYS = {
     "schema_version",
@@ -135,6 +163,13 @@ METRIC_BOUNDARY_KEYS = {"elapsed_seconds", "billed_cost", "human_interventions"}
 BUDGET_KEYS = {"max_total_runs", "max_elapsed_seconds"}
 FREEZE_KEYS = {"declared_frozen_at", "holdout_status", "ordering_evidence"}
 ORDERING_EVIDENCE_KEYS = {"status", "reviewer_identity", "source", "attestation_digest"}
+NAMED_PROTOCOL_KEYS = (PROTOCOL_KEYS - {"repository_baseline"}) | {"comparisons"}
+NAMED_CONFIGURATION_KEYS = {"configuration_id", "dimensions", "configuration_digest"}
+HARNESS_KEYS = {"backend", "runtime"}
+INSTRUCTIONS_KEYS = {"instruction_asset_digests", "harness_profile_selection_digest"}
+NAMED_COMPARISON_KEYS = {"comparison_id", "baseline", "candidate"}
+NAMED_CASE_KEYS = CASE_KEYS | {"repository_baseline"}
+NAMED_OBSERVATION_KEYS = (OBSERVATION_KEYS - {"slot"}) | {"configuration_id"}
 
 # Values this command never derives from anything else.
 NEVER_INFERRED = (
@@ -333,10 +368,10 @@ def parse_configuration(value: Any, slot: str) -> dict[str, Any]:
     }
 
 
-def parse_case(value: Any, index: int) -> dict[str, Any]:
+def parse_case(value: Any, index: int, *, named: bool = False) -> dict[str, Any]:
     label = f"case[{index}]"
-    payload = require_exact_keys(value, CASE_KEYS, label)
-    return {
+    payload = require_exact_keys(value, NAMED_CASE_KEYS if named else CASE_KEYS, label)
+    case = {
         "case_id": require_text(payload["case_id"], f"{label} case_id"),
         "task_digest": require_digest(payload["task_digest"], f"{label} task_digest"),
         "acceptance_digest": require_digest(
@@ -347,6 +382,13 @@ def parse_case(value: Any, index: int) -> dict[str, Any]:
             payload["fixture_kind"], FIXTURE_KINDS, f"{label} fixture_kind"
         ),
     }
+    if named:
+        # Each schema-2 case builds its own repository, so the baseline an
+        # observation must repeat belongs to its case, not to the protocol.
+        case["repository_baseline"] = require_digest(
+            payload["repository_baseline"], f"{label} repository_baseline"
+        )
+    return case
 
 
 def parse_ordering_evidence(value: Any) -> dict[str, Any] | None:
@@ -367,13 +409,21 @@ def parse_ordering_evidence(value: Any) -> dict[str, Any] | None:
     }
 
 
+def is_schema_version(value: Any, version: int) -> bool:
+    """Accept only the integer version, never an equal boolean or float."""
+
+    return type(value) is int and value == version
+
+
 def parse_protocol(path: str) -> dict[str, Any]:
     payload, source_digest = load_json_object(path, "comparison protocol")
+    if is_schema_version(payload.get("schema_version"), NAMED_SCHEMA_VERSION):
+        return parse_named_protocol(payload, source_digest)
     protocol = require_exact_keys(payload, PROTOCOL_KEYS, "comparison protocol")
-    if protocol["schema_version"] != COMPARISON_PROTOCOL_SCHEMA_VERSION:
+    if not is_schema_version(protocol["schema_version"], COMPARISON_PROTOCOL_SCHEMA_VERSION):
         raise ComparisonError(
-            "comparison protocol schema_version must be "
-            f"{COMPARISON_PROTOCOL_SCHEMA_VERSION}"
+            "comparison protocol schema_version must be the integer "
+            f"{COMPARISON_PROTOCOL_SCHEMA_VERSION} or {NAMED_SCHEMA_VERSION}"
         )
 
     configurations_value = protocol["configurations"]
@@ -391,19 +441,47 @@ def parse_protocol(path: str) -> dict[str, Any]:
         if slot in configurations_value
     }
 
-    cases_value = protocol["cases"]
-    if not isinstance(cases_value, list) or not cases_value:
+    cases, order = parse_cases(protocol["cases"], named=False)
+    terms = parse_frozen_terms(protocol, len(cases), len(configurations))
+
+    record = {
+        "schema_version": COMPARISON_PROTOCOL_SCHEMA_VERSION,
+        "protocol_id": require_text(protocol["protocol_id"], "protocol_id"),
+        "repository_baseline": require_digest(
+            protocol["repository_baseline"], "repository_baseline"
+        ),
+        "invariant_digest": require_digest(protocol["invariant_digest"], "invariant_digest"),
+        "authority_digest": require_digest(protocol["authority_digest"], "authority_digest"),
+        "configurations": configurations,
+        "cases": cases,
+        "case_order": order,
+        **terms,
+        "source_digest": source_digest,
+    }
+    require_controlled_axes(record)
+    return record
+
+
+def parse_cases(value: Any, *, named: bool) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    if not isinstance(value, list) or not value:
         raise ComparisonError("comparison protocol cases must be a nonempty list")
-    if len(cases_value) > MAX_CASES:
+    if len(value) > MAX_CASES:
         raise ComparisonError(f"comparison protocol declares more than {MAX_CASES} cases")
     cases: dict[str, dict[str, Any]] = {}
     order: list[str] = []
-    for index, item in enumerate(cases_value):
-        case = parse_case(item, index)
+    for index, item in enumerate(value):
+        case = parse_case(item, index, named=named)
         if case["case_id"] in cases:
             raise ComparisonError(f"comparison protocol repeats case_id: {case['case_id']}")
         cases[case["case_id"]] = case
         order.append(case["case_id"])
+    return cases, order
+
+
+def parse_frozen_terms(
+    protocol: dict[str, Any], case_count: int, configuration_count: int
+) -> dict[str, Any]:
+    """Parse the roster size, budget, metric boundaries, limits, and freeze."""
 
     repetitions = require_counter(protocol["repetitions"], "repetitions", minimum=1)
     if repetitions > MAX_REPETITIONS:
@@ -416,7 +494,7 @@ def parse_protocol(path: str) -> dict[str, Any]:
             budget["max_elapsed_seconds"], "budget max_elapsed_seconds", minimum=0.0
         ),
     }
-    expected_cells = len(cases) * repetitions * len(configurations)
+    expected_cells = case_count * repetitions * configuration_count
     if parsed_budget["max_total_runs"] < expected_cells:
         raise ComparisonError(
             "budget max_total_runs is smaller than the enumerated "
@@ -464,28 +542,231 @@ def parse_protocol(path: str) -> dict[str, Any]:
         ),
         "ordering_evidence": parse_ordering_evidence(freeze["ordering_evidence"]),
     }
-
-    record = {
-        "protocol_id": require_text(protocol["protocol_id"], "protocol_id"),
-        "repository_baseline": require_digest(
-            protocol["repository_baseline"], "repository_baseline"
-        ),
-        "invariant_digest": require_digest(protocol["invariant_digest"], "invariant_digest"),
-        "authority_digest": require_digest(protocol["authority_digest"], "authority_digest"),
-        "configurations": configurations,
-        "cases": cases,
-        "case_order": order,
+    return {
         "repetitions": repetitions,
         "budget": parsed_budget,
         "metric_boundaries": dict(boundaries),
         "intervention_rule_digest": digest_text(intervention_rule),
         "decision_limits": parsed_limits,
         "freeze": parsed_freeze,
-        "source_digest": source_digest,
         "expected_cells": expected_cells,
     }
-    require_controlled_axes(record)
-    return record
+
+
+def canonical_digest(value: Any) -> str:
+    return digest_text(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def parse_dimensions(value: Any, label: str) -> dict[str, Any]:
+    """Parse the declared dimensions that make up one named configuration."""
+
+    payload = require_exact_keys(value, DIMENSION_KEYS, label)
+    harness = require_exact_keys(payload["harness"], HARNESS_KEYS, f"{label} harness")
+    instructions = require_exact_keys(
+        payload["instructions"], INSTRUCTIONS_KEYS, f"{label} instructions"
+    )
+    selection = instructions["harness_profile_selection_digest"]
+    return {
+        # Backend and runtime form one dimension: changing the backend always
+        # changes the runtime that executes it.
+        "harness": {
+            "backend": require_text(harness["backend"], f"{label} harness backend"),
+            "runtime": parse_runtime(harness["runtime"], f"{label} harness runtime"),
+        },
+        "declared_model": require_text(payload["declared_model"], f"{label} declared_model"),
+        "reasoning_settings": parse_reasoning_settings(
+            payload["reasoning_settings"], f"{label} reasoning_settings"
+        ),
+        # A Harness Profile selection and the asset digests it selects form one
+        # dimension: changing a selected revision changes both. A configuration
+        # that selects no Harness Profile records a null selection digest.
+        "instructions": {
+            "instruction_asset_digests": require_digest_map(
+                instructions["instruction_asset_digests"],
+                f"{label} instructions instruction_asset_digests",
+            ),
+            "harness_profile_selection_digest": (
+                None
+                if selection is None
+                else require_digest(
+                    selection, f"{label} instructions harness_profile_selection_digest"
+                )
+            ),
+        },
+        "capability_registry_digest": require_digest(
+            payload["capability_registry_digest"], f"{label} capability_registry_digest"
+        ),
+        "context_policy": require_text(
+            payload["context_policy"], f"{label} context_policy"
+        ),
+        "tool_policy": require_text(payload["tool_policy"], f"{label} tool_policy"),
+        "subagent_topology": require_text(
+            payload["subagent_topology"], f"{label} subagent_topology"
+        ),
+        "environment_configuration_digest": require_digest(
+            payload["environment_configuration_digest"],
+            f"{label} environment_configuration_digest",
+        ),
+    }
+
+
+def parse_named_configuration(value: Any, index: int) -> dict[str, Any]:
+    label = f"configuration[{index}]"
+    payload = require_exact_keys(value, NAMED_CONFIGURATION_KEYS, label)
+    configuration_id = payload["configuration_id"]
+    if not isinstance(configuration_id, str) or not CONFIGURATION_ID_PATTERN.match(
+        configuration_id
+    ):
+        raise ComparisonError(
+            f"{label} configuration_id must match {CONFIGURATION_ID_PATTERN.pattern}"
+        )
+    label = f"configuration {configuration_id}"
+    dimensions = parse_dimensions(payload["dimensions"], f"{label} dimensions")
+    declared = require_digest(payload["configuration_digest"], f"{label} configuration_digest")
+    # The digest is recomputed rather than trusted, so a declared digest can
+    # never disagree with the dimensions it claims to identify.
+    if declared != canonical_digest(dimensions):
+        raise ComparisonError(
+            f"{label} declares a configuration_digest that differs from the canonical "
+            "digest of its dimensions"
+        )
+    return {
+        "configuration_id": configuration_id,
+        "dimensions": dimensions,
+        "configuration_digest": declared,
+    }
+
+
+def declared_view(configuration: dict[str, Any]) -> dict[str, Any]:
+    """Return the declared values that run summaries confirm against."""
+
+    if "dimensions" not in configuration:
+        return configuration
+    dimensions = configuration["dimensions"]
+    return {
+        "declared_model": dimensions["declared_model"],
+        "reasoning_settings": dimensions["reasoning_settings"],
+        "instruction_asset_digests": dimensions["instructions"]["instruction_asset_digests"],
+        "runtime": dimensions["harness"]["runtime"],
+    }
+
+
+def classify_pair(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    """Classify a pair by the exact set of declared dimensions that differ."""
+
+    differing = [
+        name for name, _axis in DIMENSIONS if left["dimensions"][name] != right["dimensions"][name]
+    ]
+    if not differing:
+        return {
+            "classification": "replication",
+            "axis": None,
+            "differing_dimensions": [],
+            "isolation": {
+                "isolated": False,
+                "kind": "replication",
+                "reason": "the two configurations declare identical dimensions",
+            },
+        }
+    axis = dict(DIMENSIONS)[differing[0]] if len(differing) == 1 else None
+    if axis is not None:
+        return {
+            "classification": "single_axis_effect",
+            "axis": axis,
+            "differing_dimensions": differing,
+            "isolation": {"isolated": True, "kind": "single_axis_effect", "reason": None},
+        }
+    if "reasoning_settings" in differing:
+        reason = "the two configurations declare different reasoning settings"
+    else:
+        reason = "more than one declared dimension differs"
+    return {
+        "classification": "configuration_comparison",
+        "axis": None,
+        "differing_dimensions": differing,
+        "isolation": {"isolated": False, "kind": "configuration_comparison", "reason": reason},
+    }
+
+
+def parse_named_protocol(payload: dict[str, Any], source_digest: str) -> dict[str, Any]:
+    protocol = require_exact_keys(payload, NAMED_PROTOCOL_KEYS, "comparison protocol")
+
+    configurations_value = protocol["configurations"]
+    if (
+        not isinstance(configurations_value, list)
+        or not MIN_NAMED_CONFIGURATIONS <= len(configurations_value) <= MAX_NAMED_CONFIGURATIONS
+    ):
+        raise ComparisonError(
+            "comparison protocol configurations must be a list of "
+            f"{MIN_NAMED_CONFIGURATIONS} to {MAX_NAMED_CONFIGURATIONS} named configurations"
+        )
+    configurations: dict[str, dict[str, Any]] = {}
+    configuration_order: list[str] = []
+    for index, item in enumerate(configurations_value):
+        configuration = parse_named_configuration(item, index)
+        configuration_id = configuration["configuration_id"]
+        if configuration_id in configurations:
+            raise ComparisonError(
+                f"comparison protocol repeats configuration_id: {configuration_id}"
+            )
+        configurations[configuration_id] = configuration
+        configuration_order.append(configuration_id)
+
+    comparisons_value = protocol["comparisons"]
+    if not isinstance(comparisons_value, list) or not comparisons_value:
+        raise ComparisonError("comparison protocol comparisons must be a nonempty list")
+    comparisons: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    seen_pairs: set[tuple[str, str]] = set()
+    for index, item in enumerate(comparisons_value):
+        label = f"comparison[{index}]"
+        entry = require_exact_keys(item, NAMED_COMPARISON_KEYS, label)
+        comparison_id = require_text(entry["comparison_id"], f"{label} comparison_id")
+        if comparison_id in seen_ids:
+            raise ComparisonError(f"comparison protocol repeats comparison_id: {comparison_id}")
+        baseline = require_text(entry["baseline"], f"{label} baseline")
+        candidate = require_text(entry["candidate"], f"{label} candidate")
+        for role, configuration_id in (("baseline", baseline), ("candidate", candidate)):
+            if configuration_id not in configurations:
+                raise ComparisonError(
+                    f"comparison {comparison_id} names an undeclared {role} configuration: "
+                    f"{configuration_id}"
+                )
+        if baseline == candidate:
+            raise ComparisonError(
+                f"comparison {comparison_id} pairs configuration {baseline} with itself"
+            )
+        if (baseline, candidate) in seen_pairs:
+            raise ComparisonError(
+                f"comparison protocol repeats the pair {baseline} -> {candidate}"
+            )
+        seen_ids.add(comparison_id)
+        seen_pairs.add((baseline, candidate))
+        comparisons.append(
+            {
+                "comparison_id": comparison_id,
+                "baseline": baseline,
+                "candidate": candidate,
+                **classify_pair(configurations[baseline], configurations[candidate]),
+            }
+        )
+
+    cases, order = parse_cases(protocol["cases"], named=True)
+    terms = parse_frozen_terms(protocol, len(cases), len(configurations))
+
+    return {
+        "schema_version": NAMED_SCHEMA_VERSION,
+        "protocol_id": require_text(protocol["protocol_id"], "protocol_id"),
+        "invariant_digest": require_digest(protocol["invariant_digest"], "invariant_digest"),
+        "authority_digest": require_digest(protocol["authority_digest"], "authority_digest"),
+        "configurations": configurations,
+        "configuration_order": configuration_order,
+        "comparisons": comparisons,
+        "cases": cases,
+        "case_order": order,
+        **terms,
+        "source_digest": source_digest,
+    }
 
 
 def require_controlled_axes(protocol: dict[str, Any]) -> None:
@@ -690,8 +971,17 @@ def parse_quality(value: Any, case: dict[str, Any]) -> dict[str, Any]:
 
 def parse_observation(path: str, protocol: dict[str, Any]) -> dict[str, Any]:
     payload, source_digest = load_json_object(path, "run observation")
+    if protocol["schema_version"] == NAMED_SCHEMA_VERSION:
+        return parse_named_observation(payload, source_digest, protocol)
+    # One report judges one schema. A schema-2 observation is never read
+    # against a schema-1 protocol, whatever fields the two share.
+    if is_schema_version(payload.get("schema_version"), NAMED_SCHEMA_VERSION):
+        raise ComparisonError(
+            "run observation schema_version 2 cannot be judged against a schema-1 "
+            "comparison protocol"
+        )
     record = require_exact_keys(payload, OBSERVATION_KEYS, "run observation")
-    if record["schema_version"] != RUN_OBSERVATION_SCHEMA_VERSION:
+    if not is_schema_version(record["schema_version"], RUN_OBSERVATION_SCHEMA_VERSION):
         raise ComparisonError(
             f"run observation schema_version must be {RUN_OBSERVATION_SCHEMA_VERSION}"
         )
@@ -701,7 +991,45 @@ def parse_observation(path: str, protocol: dict[str, Any]) -> dict[str, Any]:
     slot = require_choice(record["slot"], SLOTS, "run observation slot")
     if slot not in protocol["configurations"]:
         raise ComparisonError(f"run observation names a slot the protocol does not declare: {slot}")
-    configuration = protocol["configurations"][slot]
+    parsed = parse_observation_body(
+        record, protocol, slot, protocol["configurations"][slot], source_digest
+    )
+    return {"slot": slot, **parsed}
+
+
+def parse_named_observation(
+    payload: dict[str, Any], source_digest: str, protocol: dict[str, Any]
+) -> dict[str, Any]:
+    if not is_schema_version(payload.get("schema_version"), NAMED_SCHEMA_VERSION):
+        raise ComparisonError(
+            "run observation schema_version must be the integer 2 to match the schema-2 "
+            "comparison protocol"
+        )
+    record = require_exact_keys(payload, NAMED_OBSERVATION_KEYS, "run observation")
+    if record["protocol_id"] != protocol["protocol_id"]:
+        raise ComparisonError("run observation names a different comparison protocol")
+    configuration_id = require_text(record["configuration_id"], "run observation configuration_id")
+    configuration = protocol["configurations"].get(configuration_id)
+    if configuration is None:
+        raise ComparisonError(
+            "run observation names a configuration the protocol does not declare: "
+            f"{configuration_id}"
+        )
+    parsed = parse_observation_body(record, protocol, configuration_id, configuration, source_digest)
+    return {"configuration_id": configuration_id, **parsed}
+
+
+def parse_observation_body(
+    record: dict[str, Any],
+    protocol: dict[str, Any],
+    slot: str,
+    configuration: dict[str, Any],
+    source_digest: str,
+) -> dict[str, Any]:
+    """Parse the observation fields that both schemas share.
+
+    ``slot`` is the schema-1 slot or the schema-2 configuration id.
+    """
 
     case_id = require_text(record["case_id"], "run observation case_id")
     case = protocol["cases"].get(case_id)
@@ -714,10 +1042,15 @@ def parse_observation(path: str, protocol: dict[str, Any]) -> dict[str, Any]:
             f"run observation repetition {repetition} exceeds the frozen roster"
         )
 
+    repository_baseline = (
+        case["repository_baseline"]
+        if protocol["schema_version"] == NAMED_SCHEMA_VERSION
+        else protocol["repository_baseline"]
+    )
     for field, expected, message in (
         ("task_digest", case["task_digest"], "task"),
         ("acceptance_digest", case["acceptance_digest"], "acceptance"),
-        ("repository_baseline", protocol["repository_baseline"], "repository baseline"),
+        ("repository_baseline", repository_baseline, "repository baseline"),
         ("invariant_digest", protocol["invariant_digest"], "invariant"),
         ("authority_digest", protocol["authority_digest"], "authority"),
         ("configuration_digest", configuration["configuration_digest"], "configuration"),
@@ -746,7 +1079,7 @@ def parse_observation(path: str, protocol: dict[str, Any]) -> dict[str, Any]:
         )
 
     return {
-        "slot": slot,
+        "configuration_key": slot,
         "case_id": case_id,
         "repetition": repetition,
         "cell": f"{slot}/{case_id}#{repetition}",
@@ -812,7 +1145,9 @@ def load_observations(paths: list[str], protocol: dict[str, Any]) -> list[dict[s
         seen_cells[record["cell"]] = record["source_digest"]
         seen_digests.add(record["source_digest"])
         observations.append(record)
-    observations.sort(key=lambda record: (record["slot"], record["case_id"], record["repetition"]))
+    observations.sort(
+        key=lambda record: (record["configuration_key"], record["case_id"], record["repetition"])
+    )
     return observations
 
 
@@ -894,11 +1229,17 @@ def verify_evidence(
     }
 
 
+def configuration_keys(protocol: dict[str, Any]) -> list[str]:
+    """Return the slots or configuration ids in enumeration order."""
+
+    if protocol["schema_version"] == NAMED_SCHEMA_VERSION:
+        return list(protocol["configuration_order"])
+    return [slot for slot in SLOTS if slot in protocol["configurations"]]
+
+
 def enumerate_cells(protocol: dict[str, Any]) -> list[str]:
     cells: list[str] = []
-    for slot in SLOTS:
-        if slot not in protocol["configurations"]:
-            continue
+    for slot in configuration_keys(protocol):
         for case_id in protocol["case_order"]:
             for repetition in range(1, protocol["repetitions"] + 1):
                 cells.append(f"{slot}/{case_id}#{repetition}")
@@ -911,15 +1252,19 @@ def summarize_coverage(
     expected = enumerate_cells(protocol)
     observed = {record["cell"] for record in observations}
     missing = [cell for cell in expected if cell not in observed]
-    return {
+    coverage: dict[str, Any] = {
         "expected_cells": len(expected),
         "observed_cells": len(observed),
         "missing_cells": missing,
         "complete": not missing,
         "repetitions": protocol["repetitions"],
         "cases": len(protocol["case_order"]),
-        "slots": sorted(protocol["configurations"]),
     }
+    if protocol["schema_version"] == NAMED_SCHEMA_VERSION:
+        coverage["configurations"] = configuration_keys(protocol)
+    else:
+        coverage["slots"] = sorted(protocol["configurations"])
+    return coverage
 
 
 def declared_evidence_digests(record: dict[str, Any]) -> set[str]:
@@ -931,7 +1276,11 @@ def declared_evidence_digests(record: dict[str, Any]) -> set[str]:
 
 
 def summarize_slot(
-    slot: str, records: list[dict[str, Any]], configuration: dict[str, Any]
+    slot: str,
+    records: list[dict[str, Any]],
+    configuration: dict[str, Any],
+    *,
+    match_declared_model: bool = False,
 ) -> dict[str, Any]:
     total = len(records)
     declared_runtime = configuration["runtime"]
@@ -1013,8 +1362,17 @@ def summarize_slot(
         "unknown_host_instructions": sum(
             1 for r in records if r["instruction_loading"]["host_instructions"] == "unknown"
         ),
+        # Schema 1 counts any observed model identity. Schema 2 counts only an
+        # observed identity equal to the declared model, so two observed models
+        # that both differ from their declarations never confirm a model change.
         "declared_model_confirmed": sum(
-            1 for r in records if r["observed_model"]["status"] == "observed"
+            1
+            for r in records
+            if r["observed_model"]["status"] == "observed"
+            and (
+                not match_declared_model
+                or r["observed_model"]["identity"] == configuration["declared_model"]
+            )
         ),
         # Declared configuration is confirmed only when a run observed it and the
         # observation matches the frozen declaration. An unobserved field is never
@@ -1088,6 +1446,46 @@ def require_controlled_observations(
             )
 
 
+def require_named_controlled_observations(
+    name: str,
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+    left: dict[str, Any],
+    right: dict[str, Any],
+) -> None:
+    """Reject a schema-2 pair whose observations contradict its declared dimensions."""
+
+    pair = f"{name} pair {left['case_id']}#{left['repetition']}"
+    declared_left = declared_view(baseline)
+    declared_right = declared_view(candidate)
+    left_runtime = left["observed_runtime"]
+    right_runtime = right["observed_runtime"]
+    if (
+        declared_left["runtime"] == declared_right["runtime"]
+        and left_runtime["status"] == "observed"
+        and right_runtime["status"] == "observed"
+        and (
+            left_runtime["cli_version"] != right_runtime["cli_version"]
+            or left_runtime["tool_versions"] != right_runtime["tool_versions"]
+        )
+    ):
+        raise ComparisonError(f"{pair} observed uncontrolled runtime inputs")
+    left_model = left["observed_model"]
+    right_model = right["observed_model"]
+    if left_model["status"] != "observed" or right_model["status"] != "observed":
+        return
+    same_declared_model = declared_left["declared_model"] == declared_right["declared_model"]
+    same_observed_model = left_model["identity"] == right_model["identity"]
+    if same_declared_model and not same_observed_model:
+        raise ComparisonError(
+            f"{pair} observed two different models although the declared model is unchanged"
+        )
+    if not same_declared_model and same_observed_model:
+        raise ComparisonError(
+            f"{pair} observed the same model although the declared model changes"
+        )
+
+
 def axis_isolation(
     protocol: dict[str, Any], left_slot: str, right_slot: str
 ) -> dict[str, Any]:
@@ -1116,7 +1514,7 @@ def ratio(numerator: float | None, denominator: float | None) -> float | None:
 
 def build_comparison(
     name: str,
-    axis: str,
+    axis: str | None,
     baseline_slot: str,
     candidate_slot: str,
     protocol: dict[str, Any],
@@ -1124,17 +1522,26 @@ def build_comparison(
     slot_summaries: dict[str, dict[str, Any]],
     ordering_state: str,
     verified_digests: set[str],
+    isolation: dict[str, Any],
 ) -> dict[str, Any]:
     baseline_records = {f"{r['case_id']}#{r['repetition']}": r for r in by_slot[baseline_slot]}
     candidate_records = {f"{r['case_id']}#{r['repetition']}": r for r in by_slot[candidate_slot]}
     paired_keys = sorted(set(baseline_records) & set(candidate_records))
     unpaired = sorted(set(baseline_records) ^ set(candidate_records))
     for key in paired_keys:
-        require_controlled_observations(
-            name, axis, baseline_records[key], candidate_records[key]
-        )
+        if protocol["schema_version"] == NAMED_SCHEMA_VERSION:
+            require_named_controlled_observations(
+                name,
+                protocol["configurations"][baseline_slot],
+                protocol["configurations"][candidate_slot],
+                baseline_records[key],
+                candidate_records[key],
+            )
+        else:
+            require_controlled_observations(
+                name, axis, baseline_records[key], candidate_records[key]
+            )
 
-    isolation = axis_isolation(protocol, baseline_slot, candidate_slot)
     baseline = slot_summaries[baseline_slot]
     candidate = slot_summaries[candidate_slot]
     limits = protocol["decision_limits"]
@@ -1169,8 +1576,12 @@ def build_comparison(
     limit_failures: list[str] = []
     critical_blockers: list[str] = []
 
-    if not isolation["isolated"]:
+    if isolation["kind"] == "configuration_comparison":
         evidence_blockers.append("axis_not_isolated")
+    if isolation["kind"] == "replication":
+        # A replication is a reproducibility check. Identical configurations
+        # can never be evidence for adopting either side.
+        evidence_blockers.append(REPLICATION_BLOCKER)
     if unpaired:
         evidence_blockers.append("unpaired_cells")
     if not paired_keys:
@@ -1195,7 +1606,11 @@ def build_comparison(
         if summary["quality_inadmissible"]:
             evidence_blockers.append("inadmissible_quality_evidence")
         if summary["declared_model_confirmed"] < summary["runs_total"]:
-            evidence_blockers.append("model_identity_not_observed")
+            evidence_blockers.append(
+                "model_identity_not_confirmed"
+                if protocol["schema_version"] == NAMED_SCHEMA_VERSION
+                else "model_identity_not_observed"
+            )
         # A declared digest that was never supplied as a file is unverified
         # evidence. Counting it as present would let an unchecked claim carry an
         # adoption recommendation.
@@ -1308,48 +1723,127 @@ def build_comparison(
     }
 
 
+def side_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """One compared side's outcomes and coverage, each with its denominator."""
+
+    return {
+        "configuration_id": summary["configuration_id"],
+        "runs_total": summary["runs_total"],
+        "outcomes": summary["outcomes"],
+        "critical_violations": summary["critical_violations"],
+        "quality_pass_count": summary["quality_pass_count"],
+        "quality_denominator": summary["quality_denominator"],
+        "quality_pass_rate": summary["quality_pass_rate"],
+        "elapsed_seconds_all_runs": summary["elapsed_seconds_all_runs"],
+        "elapsed_seconds_completed_runs": summary["elapsed_seconds_completed_runs"],
+    }
+
+
+def build_named_comparisons(
+    protocol: dict[str, Any],
+    by_configuration: dict[str, list[dict[str, Any]]],
+    summaries: dict[str, dict[str, Any]],
+    ordering_state: str,
+    verified_digests: set[str],
+) -> list[dict[str, Any]]:
+    comparisons = []
+    for entry in protocol["comparisons"]:
+        baseline = entry["baseline"]
+        candidate = entry["candidate"]
+        result = build_comparison(
+            entry["comparison_id"],
+            entry["axis"],
+            baseline,
+            candidate,
+            protocol,
+            by_configuration,
+            summaries,
+            ordering_state,
+            verified_digests,
+            entry["isolation"],
+        )
+        del result["baseline_slot"], result["candidate_slot"]
+        result.update(
+            {
+                "classification": entry["classification"],
+                "differing_dimensions": entry["differing_dimensions"],
+                "baseline_configuration": baseline,
+                "candidate_configuration": candidate,
+                "sides": {
+                    "baseline": side_summary(summaries[baseline]),
+                    "candidate": side_summary(summaries[candidate]),
+                },
+            }
+        )
+        comparisons.append(result)
+    return comparisons
+
+
 def build_report(
     protocol: dict[str, Any],
     observations: list[dict[str, Any]],
     evidence: dict[str, Any],
 ) -> dict[str, Any]:
-    by_slot = {slot: [] for slot in protocol["configurations"]}
+    named = protocol["schema_version"] == NAMED_SCHEMA_VERSION
+    by_slot: dict[str, list[dict[str, Any]]] = {
+        slot: [] for slot in protocol["configurations"]
+    }
     for record in observations:
-        by_slot[record["slot"]].append(record)
+        by_slot[record["configuration_key"]].append(record)
     slot_summaries = {
-        slot: summarize_slot(slot, records, protocol["configurations"][slot])
+        slot: summarize_slot(
+            slot,
+            records,
+            declared_view(protocol["configurations"][slot]),
+            match_declared_model=named,
+        )
         for slot, records in by_slot.items()
     }
     ordering_state = evidence["ordering_evidence"]["state"]
     verified_digests = {entry["digest"] for entry in evidence["evidence"]}
-    comparisons = []
-    for name, baseline_slot, candidate_slot, axis in COMPARISONS:
-        if baseline_slot in by_slot and candidate_slot in by_slot:
-            comparisons.append(
-                build_comparison(
-                    name,
-                    axis,
-                    baseline_slot,
-                    candidate_slot,
-                    protocol,
-                    by_slot,
-                    slot_summaries,
-                    ordering_state,
-                    verified_digests,
+    if named:
+        for slot, summary in slot_summaries.items():
+            del summary["slot"]
+            summary["configuration_id"] = slot
+        comparisons = build_named_comparisons(
+            protocol, by_slot, slot_summaries, ordering_state, verified_digests
+        )
+        configuration_summaries = [slot_summaries[slot] for slot in protocol["configuration_order"]]
+        protocol_section: dict[str, Any] = {
+            "configurations": [
+                protocol["configurations"][configuration_id]
+                for configuration_id in protocol["configuration_order"]
+            ],
+            "comparisons": [
+                {
+                    "comparison_id": entry["comparison_id"],
+                    "baseline": entry["baseline"],
+                    "candidate": entry["candidate"],
+                }
+                for entry in protocol["comparisons"]
+            ],
+        }
+    else:
+        comparisons = []
+        for name, baseline_slot, candidate_slot, axis in COMPARISONS:
+            if baseline_slot in by_slot and candidate_slot in by_slot:
+                comparisons.append(
+                    build_comparison(
+                        name,
+                        axis,
+                        baseline_slot,
+                        candidate_slot,
+                        protocol,
+                        by_slot,
+                        slot_summaries,
+                        ordering_state,
+                        verified_digests,
+                        axis_isolation(protocol, baseline_slot, candidate_slot),
+                    )
                 )
-            )
-
-    return {
-        "schema_version": REPORT_SCHEMA_VERSION,
-        "report_kind": "paired_harness_comparison",
-        "protocol": {
-            "protocol_id": protocol["protocol_id"],
-            "source_digest": protocol["source_digest"],
+        configuration_summaries = [slot_summaries[slot] for slot in sorted(slot_summaries)]
+        protocol_section = {
             "repository_baseline": protocol["repository_baseline"],
-            "invariant_digest": protocol["invariant_digest"],
-            "authority_digest": protocol["authority_digest"],
-            "metric_boundaries": protocol["metric_boundaries"],
-            "decision_limits": protocol["decision_limits"],
             "configurations": {
                 slot: {
                     "declared_model": config["declared_model"],
@@ -1360,6 +1854,19 @@ def build_report(
                 }
                 for slot, config in protocol["configurations"].items()
             },
+        }
+
+    return {
+        "schema_version": NAMED_SCHEMA_VERSION if named else REPORT_SCHEMA_VERSION,
+        "report_kind": "named_configuration_comparison" if named else "paired_harness_comparison",
+        "protocol": {
+            "protocol_id": protocol["protocol_id"],
+            "source_digest": protocol["source_digest"],
+            "invariant_digest": protocol["invariant_digest"],
+            "authority_digest": protocol["authority_digest"],
+            "metric_boundaries": protocol["metric_boundaries"],
+            "decision_limits": protocol["decision_limits"],
+            **protocol_section,
             "cases": [protocol["cases"][case_id] for case_id in protocol["case_order"]],
         },
         "declared_only": {
@@ -1397,7 +1904,9 @@ def build_report(
                         ],
                     }
                 ),
-                "declared_model": protocol["configurations"][record["slot"]]["declared_model"],
+                "declared_model": declared_view(
+                    protocol["configurations"][record["configuration_key"]]
+                )["declared_model"],
                 "observed_model": record["observed_model"],
                 "observed_runtime": record["observed_runtime"],
                 "instruction_loading": {
@@ -1410,7 +1919,7 @@ def build_report(
             }
             for record in observations
         ],
-        "configuration_summaries": [slot_summaries[slot] for slot in sorted(slot_summaries)],
+        "configuration_summaries": configuration_summaries,
         "comparisons": comparisons,
         "never_inferred": list(NEVER_INFERRED),
         "boundaries": list(BOUNDARY_NOTES),
@@ -1418,15 +1927,23 @@ def build_report(
 
 
 def render_text(report: dict[str, Any]) -> str:
-    lines = ["# Paired harness comparison", ""]
+    named = report["schema_version"] == NAMED_SCHEMA_VERSION
+    lines = ["# Named configuration comparison" if named else "# Paired harness comparison", ""]
     protocol = report["protocol"]
     lines.append(f"protocol: {protocol['protocol_id']} source_digest={protocol['source_digest']}")
-    lines.append(f"repository_baseline: {protocol['repository_baseline']}")
+    if named:
+        for case in protocol["cases"]:
+            lines.append(
+                f"repository_baseline: {case['case_id']}={case['repository_baseline']}"
+            )
+    else:
+        lines.append(f"repository_baseline: {protocol['repository_baseline']}")
     coverage = report["coverage"]
     lines.append(
         "coverage: {observed_cells}/{expected_cells} enumerated cells "
         "({cases} cases x {repetitions} repetitions x {slot_count} configurations)".format(
-            slot_count=len(coverage["slots"]), **coverage
+            slot_count=len(coverage["configurations"] if named else coverage["slots"]),
+            **coverage,
         )
     )
     if coverage["missing_cells"]:
@@ -1459,7 +1976,8 @@ def render_text(report: dict[str, Any]) -> str:
     for summary in report["configuration_summaries"]:
         outcomes = summary["outcomes"]
         lines.append(
-            f"- {summary['slot']}: runs={summary['runs_total']} "
+            f"- {summary['configuration_id'] if named else summary['slot']}: "
+            f"runs={summary['runs_total']} "
             f"completed={outcomes['completed']} failed={outcomes['failed']} "
             f"timed_out={outcomes['timed_out']} model_unavailable={outcomes['model_unavailable']} "
             f"critical_violations={summary['critical_violations']}"
@@ -1499,12 +2017,40 @@ def render_text(report: dict[str, Any]) -> str:
         lines.append("- no comparable configuration pair is present")
     for comparison in report["comparisons"]:
         isolation = comparison["axis_isolation"]
-        lines.append(
-            f"- {comparison['comparison']} ({comparison['axis']} axis): "
-            f"{isolation['kind']}"
-        )
+        if named:
+            lines.append(
+                f"- {comparison['comparison']}: {comparison['classification']} "
+                f"({comparison['baseline_configuration']} -> "
+                f"{comparison['candidate_configuration']})"
+            )
+            lines.append(
+                "  differing_dimensions: "
+                f"{', '.join(comparison['differing_dimensions']) or 'none'}"
+            )
+            if comparison["axis"] is not None:
+                lines.append(f"  axis: {comparison['axis']}")
+        else:
+            lines.append(
+                f"- {comparison['comparison']} ({comparison['axis']} axis): "
+                f"{isolation['kind']}"
+            )
         if isolation["reason"]:
             lines.append(f"  reason: {isolation['reason']}")
+        if named:
+            for role in ("baseline", "candidate"):
+                side = comparison["sides"][role]
+                outcomes = side["outcomes"]
+                all_timing = side["elapsed_seconds_all_runs"]
+                completed_timing = side["elapsed_seconds_completed_runs"]
+                lines.append(
+                    f"  {role} {side['configuration_id']}: "
+                    + " ".join(f"{name}={outcomes[name]}" for name in OUTCOMES)
+                    + f" quality={side['quality_pass_count']}/{side['quality_denominator']}"
+                    f" elapsed_all_runs={all_timing['observation_count']}/"
+                    f"{all_timing['denominator']}"
+                    f" elapsed_completed_runs={completed_timing['observation_count']}/"
+                    f"{completed_timing['denominator']}"
+                )
         quality = comparison["quality_pass_rate"]
         lines.append(
             f"  quality_pass_rate: baseline={quality['baseline']} "
@@ -1544,7 +2090,7 @@ def render_text(report: dict[str, Any]) -> str:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Compare paired local harness runs for one model or instruction change. "
+            "Compare paired local harness runs for declared configuration changes. "
             "The report is advisory; it is never acceptance or validation evidence."
         )
     )
