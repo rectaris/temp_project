@@ -1,6 +1,6 @@
 # Treat an owner quotation recorded in the plan manifest as the standing continuation authorization at plan start
 
-status: backlog
+status: in_progress
 primary_invariant: A plan's own standing_continuation_authorization line, holding the owner's verbatim words, is the only new source of a standing authorization; it is bound to the exact committed plan before the first formal review, and a plan without it, the four-review maximum and the fresh owner decision after the fourth review are unchanged.
 task_types:
   - planning_docs

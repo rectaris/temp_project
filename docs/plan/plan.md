@@ -1,3 +1,4 @@
 # Active Plan
 
-No active development items.
+id	path	status
+424	docs/plan/active/424-take-standing-authorization-from-the-plan-manifest.md	in_progress
