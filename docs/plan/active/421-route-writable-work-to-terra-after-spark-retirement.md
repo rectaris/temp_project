@@ -1,6 +1,6 @@
 # Replace the retired gpt-5.3-codex-spark with gpt-5.6-terra medium in writable routing, helper profiles and generated projects
 
-status: backlog
+status: in_progress
 primary_invariant: No shipped or seeded configuration selects the retired gpt-5.3-codex-spark: writable work that is eligible for delegation runs on gpt-5.6-terra medium, the gpt-5.6-luna max availability fallback and the Sol review role are unchanged, and a generated project's own non-retired model choices are never rewritten.
 task_types:
   - template_workflow
