@@ -1,6 +1,6 @@
 # Replace the retired gpt-5.3-codex-spark with gpt-5.6-terra medium in writable routing, helper profiles and generated projects
 
-status: in_progress
+status: checked
 primary_invariant: No shipped or seeded configuration selects the retired gpt-5.3-codex-spark: writable work that is eligible for delegation runs on gpt-5.6-terra medium, the gpt-5.6-luna max availability fallback and the Sol review role are unchanged, and a generated project's own non-retired model choices are never rewritten.
 task_types:
   - template_workflow
@@ -107,13 +107,21 @@ checked_summary_ja: 提供が終了した gpt-5.3-codex-spark を、書き込み
 
 ## Tasks
 
-- [ ] Before product edits, prepare the parent-direct execution ledger with prepare-parent-direct, record the review-route check, and record the unchanged baseline results of the focused suites.
-- [ ] Add python3 tests/test-copier-migration.py to the root validation-command allowlist.
-- [ ] Change the runner routing and constants in both copies, and update the routing and fallback cases.
-- [ ] Move the two helper profiles to Terra in both layouts and update AGENTS instructions, orchestration guidance, the orchestrator skill, both policy checkers, the generated-semantics assertions, smoke and CHANGELOG.md.
-- [ ] Add the retired-value migration to the updater and both transition validators, with cases for Spark migration and for refusing every other replacement, and extend the Copier update test with a Spark-declaring project.
-- [ ] Record a passing adversarial preflight, obtain independent review through a fresh read-only Codex reviewer whose first prompt carries the ReviewPacket marker, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
+- [x] Before product edits, prepare the parent-direct execution ledger with prepare-parent-direct, record the review-route check, and record the unchanged baseline results of the focused suites.
+- [x] Add python3 tests/test-copier-migration.py to the root validation-command allowlist.
+- [x] Change the runner routing and constants in both copies, and update the routing and fallback cases.
+- [x] Move the two helper profiles to Terra in both layouts and update AGENTS instructions, orchestration guidance, the orchestrator skill, both policy checkers, the generated-semantics assertions, smoke and CHANGELOG.md.
+- [x] Add the retired-value migration to the updater and both transition validators, with cases for Spark migration and for refusing every other replacement, and extend the Copier update test with a Spark-declaring project.
+- [x] Record a passing adversarial preflight, obtain independent review through a fresh read-only Codex reviewer whose first prompt carries the ReviewPacket marker, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
 
 ## Validation Notes
 
 - Owner instruction on 2026-09-26 asked to define these environment and workflow changes as rules and to create plans for them: create each task worktree's .venv with uv, let Bubblewrap run the .venv Python, replace the retired gpt-5.3-codex-spark with gpt-5.6-terra medium, fix the check-time plan-id reservations, and approve continuations up to the fourth review once at plan start (option A).
+- Parent-direct implementation was prepared against source `aab9d960f1a6f8cdfd8872c0b50069bafaca4e67`. Each epoch recorded its own runtime-proven read-only route probe and exact-target adversarial preflight. No writable helper was used. No standing authorization was registered, so each continuation used a fresh owner decision.
+- Baseline: the four Python focused suites passed unchanged. `tests/copier-update.sh --require-copier` failed only because the plain system Python lacked Ruff; it passed with the main checkout's pinned `.venv/bin` first on `PATH`. The sandboxed-runner tests need the system Python, because Bubblewrap cannot reach that `.venv` interpreter (plans 422 and 423). Later runs used the same split.
+- Formal review 1 recorded one Medium finding and stopped epoch 0: the validators dropped whole fixed-field lines, so rewriting a comment or quoting on a model line passed. The owner selected “同一プランの続行を承認する”, and a schema-1 authorization opened epoch 1. The validators now compare every existing line byte for byte and in place. The only rewrite they allow is the retired value on its own model line, and an inserted default must use the updater's form.
+- Formal review 2 cleared that finding but recorded one Medium and stopped epoch 1: after a final line without a newline, the updater's own insertion was refused. The owner selected “最後の続行(エポック2)を承認する”, and a schema-2 authorization opened terminal epoch 2. That final line may now gain exactly one newline, and only when an inserted default directly follows it. The updater renders every profile before it writes any, so a refused profile leaves the destination unchanged.
+- Formal review 3, in a fresh read-only Codex session, reported `REVIEW-VERDICT: none`. No fourth review was needed.
+- Regression proof: the new routing, retired-model, byte-level and final-line cases failed against the source baseline and pass now. The v1.4.1 update lane replaces read-only Spark profiles in place and keeps a declared `high` effort. The v1.2.1 lane still ends read-only on Terra through the exact migration. Adoption recopy runs no migration, so the exact v1.2.1-era worker from v0.4.6 keeps its bytes; `SPEC_COPIER_ADOPTION.md` records the manual migration command.
+- Focused validation passed: `python3 tests/test-sandboxed-plan-worker.py` (268 tests), `python3 scripts/check-copier-template.py`, `python3 scripts/check-root-agent-policy.py`, `python3 tests/test-copier-migration.py` (42 tests) and `tests/copier-update.sh --require-copier`. Authoritative `scripts/lint-project-workflow.sh` and `tests/smoke.sh` each ran once after the clearing review and passed. The completion and archive execution gates passed before lifecycle edits.
+- Accepted implementation commit: `082e449`. External ledgers, authorizations, review receipts and validation output are retained under `~/.local/state/project-agent-workflow/plan-421-20260927/`. Link changes: none.
