@@ -2349,6 +2349,54 @@ class TaskPublicationTest(unittest.TestCase):
         self.assertFalse(worktree.exists())
         self.assertFalse(self.paths["record"].exists())
 
+    def test_publication_releases_only_the_tasks_unused_identifiers(self) -> None:
+        worktree = self.prepare()
+        unused = [
+            GUARD_MODULE.reserve_plan_id(worktree, input_digest="sha256:" + marker * 64)
+            for marker in ("a", "b")
+        ]
+        other = GUARD_MODULE.reserve_plan_id(
+            self.repository, input_digest="sha256:" + "c" * 64
+        )
+        self.commit_task_work(worktree)
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "publish", self.plan, "--owner-id", "owner-a"],
+            cwd=worktree, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        ledger = GUARD_MODULE.reservation_ledger_path(self.repository)
+        self.assertEqual(GUARD_MODULE.read_reservations(ledger), [other])
+        replacement = GUARD_MODULE.reserve_plan_id(
+            self.repository, input_digest="sha256:" + "d" * 64
+        )
+        self.assertEqual(replacement["plan_id"], unused[0]["plan_id"])
+
+    def test_retirement_releases_unused_identifiers_including_stranded_recovery(self) -> None:
+        for stranded in (False, True):
+            with self.subTest(stranded=stranded):
+                worktree = self.prepare()
+                unused = GUARD_MODULE.reserve_plan_id(
+                    worktree, input_digest="sha256:" + "a" * 64
+                )
+                other = GUARD_MODULE.reserve_plan_id(
+                    self.repository, input_digest="sha256:" + "b" * 64
+                )
+                if stranded:
+                    git(self.repository, "worktree", "remove", str(worktree))
+                result = self.run_command(
+                    "retire", self.plan, "--owner-id", "owner-a", "--stopped"
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                ledger = GUARD_MODULE.reservation_ledger_path(self.repository)
+                self.assertEqual(GUARD_MODULE.read_reservations(ledger), [other])
+                replacement = GUARD_MODULE.reserve_plan_id(
+                    self.repository, input_digest="sha256:" + "c" * 64
+                )
+                self.assertEqual(replacement["plan_id"], unused["plan_id"])
+                GUARD_MODULE.release_unwritten_plan_id_reservations(
+                    self.repository, self.repository
+                )
+
 
 class PlanIdentifierReservationTest(unittest.TestCase):
     """Disposable-repository tests for cross-worktree plan-identifier allocation."""
@@ -2417,6 +2465,62 @@ class PlanIdentifierReservationTest(unittest.TestCase):
         )
         self.assertEqual(first["plan_id"], second["plan_id"])
         self.assertEqual(second["relative_path"], "docs/plan/active/007-named.md")
+
+    def test_revised_target_reuses_its_identifier_without_merging_other_targets(self) -> None:
+        first = GUARD_MODULE.reserve_plan_id(
+            self.repository, input_digest=self.digest("a"), lifecycle="active", slug="draft"
+        )
+        for marker in ("b", "c"):
+            revised = GUARD_MODULE.reserve_plan_id(
+                self.repository, input_digest=self.digest(marker),
+                lifecycle="active", slug="draft",
+            )
+            self.assertEqual(revised["plan_id"], first["plan_id"])
+            self.assertEqual(revised["input_digest"], self.digest(marker))
+        ledger = GUARD_MODULE.reservation_ledger_path(self.repository)
+        self.assertEqual(GUARD_MODULE.read_reservations(ledger), [revised])
+        other_slug = GUARD_MODULE.reserve_plan_id(
+            self.repository, input_digest=self.digest("c"), lifecycle="active", slug="other"
+        )
+        other_lifecycle = GUARD_MODULE.reserve_plan_id(
+            self.repository, input_digest=self.digest("c"), lifecycle="backlog", slug="draft"
+        )
+        linked = self.linked_worktree("same-target")
+        other_worktree = GUARD_MODULE.reserve_plan_id(
+            linked, input_digest=self.digest("c"), lifecycle="active", slug="draft"
+        )
+        self.assertEqual(
+            [first["plan_id"], other_slug["plan_id"], other_lifecycle["plan_id"],
+             other_worktree["plan_id"]],
+            ["007", "008", "009", "010"],
+        )
+        GUARD_MODULE.mark_plan_id_written(
+            self.repository, input_digest=self.digest("c"), plan_id=first["plan_id"]
+        )
+        after_write = GUARD_MODULE.reserve_plan_id(
+            self.repository, input_digest=self.digest("d"), lifecycle="active", slug="draft"
+        )
+        self.assertEqual(after_write["plan_id"], "011")
+
+    def test_cleanup_preserves_written_and_other_worktree_entries_exactly(self) -> None:
+        linked = self.linked_worktree("cleanup")
+        unused = GUARD_MODULE.reserve_plan_id(linked, input_digest=self.digest("a"))
+        written = GUARD_MODULE.reserve_plan_id(linked, input_digest=self.digest("b"))
+        GUARD_MODULE.mark_plan_id_written(
+            linked, input_digest=self.digest("b"), plan_id=written["plan_id"]
+        )
+        GUARD_MODULE.reserve_plan_id(self.repository, input_digest=self.digest("c"))
+        ledger = GUARD_MODULE.reservation_ledger_path(self.repository)
+        expected = [
+            entry for entry in GUARD_MODULE.read_reservations(ledger)
+            if entry["plan_id"] != unused["plan_id"]
+        ]
+        GUARD_MODULE.release_unwritten_plan_id_reservations(self.repository, linked)
+        self.assertEqual(GUARD_MODULE.read_reservations(ledger), expected)
+        replacement = GUARD_MODULE.reserve_plan_id(
+            self.repository, input_digest=self.digest("d")
+        )
+        self.assertEqual(replacement["plan_id"], unused["plan_id"])
 
     def test_a_second_linked_worktree_cannot_take_a_reserved_identifier(self) -> None:
         first = GUARD_MODULE.reserve_plan_id(self.repository, input_digest=self.digest("a"))

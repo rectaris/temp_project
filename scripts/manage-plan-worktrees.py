@@ -1663,6 +1663,7 @@ def publish(args: argparse.Namespace) -> None:
         if git_text(checkout, "rev-parse", "HEAD") != observed:
             raise WorktreeError("the source checkout does not reflect the published commit")
         if retaining_transition:
+            guard.release_unwritten_plan_id_reservations(checkout, target)
             updated = dict(record)
             updated["accepted_tip"] = accepted_commit
             updated["owner"] = {
@@ -1691,6 +1692,7 @@ def publish(args: argparse.Namespace) -> None:
         retire_worktree(
             repository, target, branch_ref, branch_short, anchor=checkout, published=True
         )
+        guard.release_unwritten_plan_id_reservations(checkout, target)
         journal_path.unlink(missing_ok=True)
         # `publish` is the one command that runs with a resume journal present,
         # so it is also the one that can leave a journal behind with no record
@@ -1771,6 +1773,7 @@ def recover_stranded_record(
         git(anchor, "branch", "-D", branch_short)
     if exact_ref_tip(anchor, branch_ref) is not None:
         raise WorktreeError("temporary task branch remains after deletion")
+    guard.release_unwritten_plan_id_reservations(anchor, raw)
     paths["journal"].unlink(missing_ok=True)
     paths["publication"].unlink(missing_ok=True)
     paths["record"].unlink(missing_ok=True)
@@ -2071,6 +2074,7 @@ def retire(args: argparse.Namespace) -> None:
                 authorization["member_result_tree"] if authorization else None
             ),
         )
+        guard.release_unwritten_plan_id_reservations(checkout, target)
         paths["journal"].unlink(missing_ok=True)
         paths["publication"].unlink(missing_ok=True)
         paths["record"].unlink(missing_ok=True)

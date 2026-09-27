@@ -361,12 +361,12 @@ class PlanAuthoringInRepositoryTest(unittest.TestCase):
             text=True,
         )
 
-    def accepted_input(self) -> dict:
+    def accepted_input(self, profile: str = "root") -> dict:
         cases = json.loads((FIXTURES / "cases.json").read_text(encoding="utf-8"))["cases"]
         for case in cases:
-            if case["expect"] == "accept" and case["input"]["profile"] == "root":
+            if case["expect"] == "accept" and case["input"]["profile"] == profile:
                 return case["input"]
-        raise AssertionError("no accepted root case")
+        raise AssertionError(f"no accepted {profile} case")
 
     def run_command(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -447,3 +447,61 @@ class PlanAuthoringInRepositoryTest(unittest.TestCase):
         reported = [line for line in report.splitlines() if line.startswith("next-plan-id: ")]
         relative = module.write_authoring_input(self.root, source, digest, profile="root")
         self.assertEqual(reported, [f"next-plan-id: {relative[len('docs/plan/active/'):][:3]}"])
+
+    def test_revised_recheck_keeps_id_and_refuses_superseded_write_in_both_copies(self) -> None:
+        for index, module_path in enumerate(PLAN_AUTHORING_MODULES):
+            with self.subTest(module=module_path):
+                module = load_module(module_path, f"revised_authoring_{index}")
+                profile = "root" if index == 0 else "generated"
+                document = self.accepted_input(profile)
+                document["slug"] = f"revised-{index}"
+                source_a = self.root / f"input-a-{index}.json"
+                source_b = self.root / f"input-b-{index}.json"
+                source_a.write_text(json.dumps(document), encoding="utf-8")
+                document["summary"] += " after revision"
+                source_b.write_text(json.dumps(document, indent=2), encoding="utf-8")
+                digest_a, report_a = module.check_authoring_input(
+                    self.root, source_a, profile=profile
+                )
+                digest_b, report_b = module.check_authoring_input(
+                    self.root, source_b, profile=profile
+                )
+                identifier = f"{index + 1:03d}"
+                self.assertIn(f"next-plan-id: {identifier}", report_a)
+                self.assertIn(f"next-plan-id: {identifier}", report_b)
+                guard = module.locate_worktree_guard()
+                ledger = guard.reservation_ledger_path(self.root)
+                ledger_before = ledger.read_bytes()
+                files_before = {
+                    path.relative_to(self.root): path.read_bytes()
+                    for path in (self.root / "docs/plan").rglob("*.md")
+                }
+                with self.assertRaises(module.AuthoringError):
+                    module.write_authoring_input(
+                        self.root, source_a, digest_a, profile=profile
+                    )
+                self.assertEqual(ledger.read_bytes(), ledger_before)
+                self.assertEqual(
+                    {
+                        path.relative_to(self.root): path.read_bytes()
+                        for path in (self.root / "docs/plan").rglob("*.md")
+                    },
+                    files_before,
+                )
+                written = module.write_authoring_input(
+                    self.root, source_b, digest_b, profile=profile
+                )
+                self.assertEqual(written, f"docs/plan/active/{identifier}-revised-{index}.md")
+                self.assertIn(
+                    f"{identifier}\t{written}\t",
+                    (self.root / "docs/plan/plan.md").read_text(encoding="utf-8"),
+                )
+
+    def test_write_without_check_cannot_allocate_an_identifier(self) -> None:
+        module = self.module()
+        source = self.root / "unchecked.json"
+        source.write_text(json.dumps(self.accepted_input()), encoding="utf-8")
+        digest = module.byte_digest(source.read_bytes())
+        with self.assertRaises(module.AuthoringError):
+            module.write_authoring_input(self.root, source, digest, profile="root")
+        self.assertEqual(list((self.root / "docs/plan/active").iterdir()), [])

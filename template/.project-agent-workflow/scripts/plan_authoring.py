@@ -1313,8 +1313,8 @@ def reserve_plan_identifier(root: Path, document: dict[str, Any], digest: str) -
     Allocation reads the exact published source state and the live cross-worktree
     reservations rather than this checkout's files, so a stale or ahead working
     tree cannot hand the same identifier to two linked worktrees. The reservation
-    is keyed by the checked input digest, so the identifier a check reports is the
-    identifier its own write consumes, and publication is what releases it.
+    is reused per worktree and target, replacing the checked input digest on each
+    check. Writing verifies that digest without replacing or allocating it.
     """
 
     if not shared_lifecycle_state_available(root):
@@ -1329,6 +1329,22 @@ def reserve_plan_identifier(root: Path, document: dict[str, Any], digest: str) -
     if PLAN_ID_RE.fullmatch(plan_id) is None:
         raise AuthoringError(f"reserved plan identifier is malformed: {plan_id!r}")
     return plan_id
+
+
+def checked_plan_identifier(root: Path, document: dict[str, Any], digest: str) -> str:
+    """Require the reservation from check, leaving a superseded draft refused."""
+
+    if not shared_lifecycle_state_available(root):
+        return next_plan_id(root)
+    guard = locate_worktree_guard()
+    try:
+        reservation = guard.checked_plan_id_reservation(
+            root, input_digest=digest,
+            lifecycle=document["lifecycle"], slug=document["slug"],
+        )
+    except guard.WorktreeError as exc:
+        raise AuthoringError(str(exc)) from exc
+    return reservation["plan_id"]
 
 
 def plan_relative_path(document: dict[str, Any], plan_id: str) -> str:
@@ -1429,7 +1445,7 @@ def write_authoring_input(
     with lifecycle_lock(root):
         reject_symlinked_declared_paths(root, document)
         rows = read_index_rows(root)
-        plan_id = reserve_plan_identifier(root, document, digest)
+        plan_id = checked_plan_identifier(root, document, digest)
         relative = plan_relative_path(document, plan_id)
         reject_symlinked_components(root, relative, "plan target")
         target = root / relative

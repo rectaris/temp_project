@@ -1221,13 +1221,11 @@ def reserve_plan_id(
     now: int | None = None,
     lease_seconds: int = RESERVATION_LEASE_SECONDS,
 ) -> dict[str, Any]:
-    """Reserve the smallest free identifier for one exact checked authoring input.
+    """Reserve one identifier per unwritten worktree/lifecycle/slug target.
 
-    The reservation is keyed by the checked input bytes, so the identifier a
-    check reports is the identifier its own write consumes. Re-reserving the same
-    input from the same worktree renews rather than advances, which keeps check
-    and write idempotent while a competing worktree still cannot take that
-    identifier.
+    Rechecking a revised input replaces its digest without advancing the target's
+    identifier. Callers without a target retain digest-based reservation reuse.
+    A write must verify the current digest rather than call this replacing path.
     """
 
     if DIGEST_RE.fullmatch(input_digest) is None:
@@ -1244,12 +1242,27 @@ def reserve_plan_id(
         mine = [
             entry
             for entry in entries
-            if entry["input_digest"] == input_digest
-            and entry["worktree_path"] == holder
+            if entry["worktree_path"] == holder
+            and (
+                (
+                    entry["relative_path"]
+                    and entry["relative_path"]
+                    == reservation_relative_path(entry["plan_id"], lifecycle, slug)
+                )
+                or (
+                    not entry["relative_path"]
+                    and entry["input_digest"] == input_digest
+                )
+                or (
+                    not lifecycle and not slug
+                    and entry["input_digest"] == input_digest
+                )
+            )
             and not entry["written"]
         ]
         if mine:
             reservation = dict(mine[0])
+            reservation["input_digest"] = input_digest
             reservation["lease_expires_at"] = moment + lease_seconds
             entries = [entry for entry in entries if entry not in mine]
         else:
@@ -1273,6 +1286,49 @@ def reserve_plan_id(
             raise WorktreeError("plan-id reservation ledger is full")
         write_reservations(ledger, sorted(entries, key=lambda entry: entry["plan_id"]))
     return reservation
+
+
+def checked_plan_id_reservation(
+    repository: Path, *, input_digest: str, lifecycle: str, slug: str
+) -> dict[str, Any]:
+    """Look up the exact checked, unwritten target without allocating or renewing."""
+
+    with plan_lifecycle_lock(repository):
+        commit = published_source_commit(repository)
+        published = plan_ids_in_commit(repository, commit) if commit is not None else set()
+        entries = live_reservations(
+            repository, read_reservations(reservation_ledger_path(repository)),
+            published, int(time.time()),
+        )
+        matches = [
+            entry for entry in entries
+            if entry["worktree_path"] == str(repository)
+            and entry["input_digest"] == input_digest
+            and not entry["written"]
+            and entry["relative_path"]
+            and entry["relative_path"]
+            == reservation_relative_path(entry["plan_id"], lifecycle, slug)
+        ]
+        if len(matches) != 1:
+            raise WorktreeError(
+                "no live plan-id reservation matches this checked input and target; "
+                "check the current draft before writing"
+            )
+        return matches[0]
+
+
+def release_unwritten_plan_id_reservations(repository: Path, worktree: Path) -> None:
+    """Release only this worktree's unused reservations under the shared lock."""
+
+    with plan_lifecycle_lock(repository):
+        ledger = reservation_ledger_path(repository)
+        entries = read_reservations(ledger)
+        retained = [
+            entry for entry in entries
+            if entry["worktree_path"] != str(worktree) or entry["written"]
+        ]
+        if len(retained) != len(entries):
+            write_reservations(ledger, retained)
 
 
 def mark_plan_id_written(
