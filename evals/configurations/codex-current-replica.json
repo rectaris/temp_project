@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "configuration_id": "codex-current-replica",
+  "backend": "codex",
+  "runtime": {
+    "cli_version": "codex-cli 0.157.1",
+    "tool_versions": {}
+  },
+  "model": "gpt-5.6-terra",
+  "reasoning": {
+    "supported": true,
+    "effort": "medium"
+  },
+  "instruction_assets": [
+    "evals/prompts/task-frame-v1.md"
+  ],
+  "harness_profile_selection": null,
+  "context_policy": "task_frame_then_case_task",
+  "tool_policy": "codex_exec_workspace_write",
+  "subagent_topology": "single_agent",
+  "environment_id": "bwrap-default"
+}

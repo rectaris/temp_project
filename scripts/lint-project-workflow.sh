@@ -81,6 +81,7 @@ python3 "$root/tests/test-referent-contract.py"
 python3 "$root/tests/test-harness-comparison.py"
 python3 "$root/tests/test-harness-comparison.py" --generated
 python3 "$root/tests/test-harness-profiles.py"
+python3 "$root/tests/test-agent-eval.py"
 python3 "$root/tests/test-template-feedback.py"
 python3 "$root/tests/test-template-feedback-collection.py"
 python3 "$root/tests/test-development-direction.py"

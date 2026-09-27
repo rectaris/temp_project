@@ -53,6 +53,7 @@ PYTHON_SCRIPT_ARGUMENTS = {
     "tests/test-validation-tools.py": {()},
     "tests/test-harness-comparison.py": {(), ("--generated",)},
     "tests/test-harness-profiles.py": {()},
+    "tests/test-agent-eval.py": {()},
     "tests/test-referent-contract.py": {()},
     "tests/test-hooks.py": {()},
     "tests/test-verify-copier-update.py": {()},

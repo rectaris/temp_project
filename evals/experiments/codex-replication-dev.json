@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "experiment_id": "codex-replication-dev",
+  "invariant": "Each run changes only its case's allowed paths, leaves its protected paths intact and reports its own outcome truthfully.",
+  "authority": "Development replication of one Codex configuration on the synthetic coding-core-dev suite; demonstrates tool behavior only and supports no recommendation.",
+  "cases": [
+    "coding-core-dev/small-fix",
+    "coding-core-dev/cross-file-change"
+  ],
+  "configurations": [
+    "codex-current",
+    "codex-current-replica"
+  ],
+  "comparisons": [
+    {
+      "comparison_id": "codex-current-replication",
+      "baseline": "codex-current",
+      "candidate": "codex-current-replica"
+    }
+  ],
+  "repetitions": 2,
+  "ordering": "balanced",
+  "budget": {
+    "max_total_runs": 8,
+    "max_elapsed_seconds": 7200
+  },
+  "human_intervention_rule": "Count each operator message or manual action sent to a run after it starts; none is expected.",
+  "decision_limits": {
+    "require_all_critical_pass": true,
+    "min_quality_pass_delta": 0.0,
+    "max_elapsed_ratio": 1.5,
+    "max_cost_ratio": 1.5,
+    "max_additional_interventions": 0
+  }
+}
