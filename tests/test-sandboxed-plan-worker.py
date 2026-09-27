@@ -801,6 +801,46 @@ def execution_state_path(manifest: dict[str, object]) -> Path:
     return lifecycle.with_name(lifecycle.name + f".{run_id}.plan-execution.json")
 
 
+def make_fake_python_runtime(prefix: Path, version: tuple[int, int] | None = None) -> Path:
+    """Create an installation prefix holding bin/pythonX.Y and its standard-library landmark."""
+    major, minor = version or (sys.version_info[0], sys.version_info[1])
+    interpreter = prefix / "bin" / f"python{major}.{minor}"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("#!/bin/sh\n", encoding="utf-8")
+    interpreter.chmod(0o755)
+    landmark = prefix / "lib" / f"python{major}.{minor}" / "os.py"
+    landmark.parent.mkdir(parents=True)
+    landmark.write_text("", encoding="utf-8")
+    return interpreter
+
+
+def make_fake_venv(root: Path, interpreter: Path, *, home: Path | None = None) -> Path:
+    """Create a venv whose bin/python3 links to the interpreter and whose pyvenv.cfg names a base."""
+    link = root / "bin" / "python3"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(interpreter)
+    (root / "pyvenv.cfg").write_text(
+        f"home = {home or interpreter.parent}\n"
+        f"version_info = {sys.version_info[0]}.{sys.version_info[1]}.0\n",
+        encoding="utf-8",
+    )
+    return link
+
+
+def bwrap_mounts(argv: list[str]) -> list[tuple[str, str, str]]:
+    """Return the bind mounts of a Bubblewrap argument vector, before its command."""
+    end = argv.index("--")
+    mounts: list[tuple[str, str, str]] = []
+    index = 0
+    while index < end:
+        if argv[index] in {"--ro-bind", "--bind"}:
+            mounts.append((argv[index], argv[index + 1], argv[index + 2]))
+            index += 3
+        else:
+            index += 1
+    return mounts
+
+
 def write_worker(path: Path, body: str) -> None:
     header = textwrap.dedent(
         f"""\
@@ -4550,6 +4590,310 @@ fs.linkSync(source, target);
         self.assertFalse(outside_path.exists())
         manifest = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
         self.assertEqual(manifest["changed_paths"], ["allowed.txt"])
+
+    def interpreter_attempt_dirs(self, root: Path) -> tuple[Path, Path, Path]:
+        repo, clone, scratch = root / "repo", root / "clone", root / "scratch"
+        for directory in (repo, clone, scratch):
+            directory.mkdir()
+        return repo, clone, scratch
+
+    def collect_with_fake_sandbox(
+        self, repo: Path, clone: Path, scratch: Path
+    ) -> tuple[list[list[str]], BaseException | None]:
+        captured: list[list[str]] = []
+
+        def fake_run(argv: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+            captured.append(list(argv))
+            (scratch / "candidate.patch").write_bytes(b"")
+            (scratch / "candidate-head.txt").write_text("head\n", encoding="utf-8")
+            (scratch / "candidate-refs.txt").write_bytes(b"")
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+        error: BaseException | None = None
+        with mock.patch.object(RUNNER, "run_subprocess", side_effect=fake_run):
+            try:
+                RUNNER.collect_candidate_patch_in_sandbox(
+                    bwrap_bin="/usr/bin/bwrap",
+                    repo_root=repo,
+                    git_bin="/usr/bin/git",
+                    clone_dir=clone,
+                    scratch_dir=scratch,
+                    env_vars={},
+                )
+            except RUNNER.RunnerError as raised:
+                error = raised
+        return captured, error
+
+    def test_patch_collection_launches_the_canonical_runner_interpreter_with_only_its_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / "managed-python"
+            interpreter = make_fake_python_runtime(prefix)
+            link = make_fake_venv(root / "runner-venv", interpreter)
+            repo, clone, scratch = self.interpreter_attempt_dirs(root)
+            with mock.patch.object(RUNNER.sys, "executable", str(link)):
+                captured, error = self.collect_with_fake_sandbox(repo, clone, scratch)
+            self.assertIsNone(error)
+            argv = captured[0]
+            self.assertEqual(argv[argv.index("--") + 1 : argv.index("--") + 4], [str(interpreter), "-I", "-c"])
+            reference = RUNNER.build_bwrap_command(
+                bwrap_bin="/usr/bin/bwrap",
+                clone_dir=clone,
+                scratch_dir=scratch,
+                command=["/usr/bin/true"],
+                env_vars={},
+                writable_clone=True,
+            )
+            added = [mount for mount in bwrap_mounts(argv) if mount not in bwrap_mounts(reference)]
+            self.assertEqual(added, [("--ro-bind", str(prefix), str(prefix))])
+
+    def test_patch_collection_runs_a_linked_runner_interpreter_inside_bubblewrap(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        git_bin = shutil.which("git")
+        bwrap_bin = shutil.which("bwrap")
+        assert git_bin is not None and bwrap_bin is not None
+        head = git(repo, "rev-parse", "HEAD").stdout.strip()
+        clone = root / "clone"
+        scratch = root / "scratch"
+        scratch.mkdir()
+        RUNNER.clone_at_head(repo, git_bin, head, clone)
+        (clone / "allowed.txt").write_text("changed through linked interpreter\n", encoding="utf-8")
+        link = root / "runner-link" / "python3"
+        link.parent.mkdir()
+        link.symlink_to(os.path.realpath(sys.executable))
+        env_vars = RUNNER.prepare_worker_environment(
+            source_repo=repo,
+            clone_dir=clone,
+            scratch_dir=scratch,
+            plan_rel=plan_path,
+            extra_env=(),
+            include_codex_home=False,
+        )
+        with mock.patch.object(RUNNER.sys, "executable", str(link)):
+            patch, collected_head, _refs = RUNNER.collect_candidate_patch_in_sandbox(
+                bwrap_bin=bwrap_bin,
+                repo_root=repo,
+                git_bin=git_bin,
+                clone_dir=clone,
+                scratch_dir=scratch,
+                env_vars=env_vars,
+            )
+        self.assertIn(b"+changed through linked interpreter", patch)
+        self.assertEqual(collected_head, head)
+
+    def test_custom_worker_venv_interpreter_loads_its_standard_library_and_packages(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        venv = root / "worker-venv"
+        subprocess.run(
+            [os.path.realpath(sys.executable), "-I", "-m", "venv", "--without-pip", str(venv)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        site_packages = venv / "lib" / f"python{sys.version_info[0]}.{sys.version_info[1]}" / "site-packages"
+        (site_packages / "venv_marker_package.py").write_text('MARKER = "venv package loaded"\n', encoding="utf-8")
+        worker = root / "worker.py"
+        write_worker(
+            worker,
+            textwrap.dedent(
+                """\
+                import sys
+
+                import venv_marker_package
+
+                (worker_repo / "allowed.txt").write_text(
+                    venv_marker_package.MARKER + " prefix=" + sys.prefix + "\\n", encoding="utf-8"
+                )
+                """
+            ),
+        )
+        output = root / "output"
+        result = run_cli(
+            repo,
+            "run",
+            plan_path,
+            "--output-dir",
+            str(output),
+            "--worker-binary",
+            str(venv / "bin" / "python3"),
+            "--worker-arg",
+            str(worker),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["changed_paths"], ["allowed.txt"])
+        patch = Path(manifest["patch_path"]).read_text(encoding="utf-8")
+        self.assertIn(f"+venv package loaded prefix={venv}", patch)
+
+    def test_custom_worker_venv_link_mounts_only_the_venv_and_base_prefix_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / "managed-python"
+            interpreter = make_fake_python_runtime(prefix)
+            venv = root / "worker-venv"
+            link = make_fake_venv(venv, interpreter)
+            repo, clone, scratch = self.interpreter_attempt_dirs(root)
+            self.assertEqual(RUNNER.require_worker_executable(str(link)), str(link))
+            roots = RUNNER.venv_interpreter_runtime_roots(
+                link, repo_root=repo, clone_dir=clone, scratch_dir=scratch
+            )
+            self.assertEqual(roots, (venv, prefix))
+            common = {
+                "bwrap_bin": "/usr/bin/bwrap",
+                "clone_dir": clone,
+                "scratch_dir": scratch,
+                "command": [str(link), "worker.py"],
+                "env_vars": {},
+            }
+            argv = RUNNER.build_bwrap_command(**common, runtime_roots=roots)
+            reference = RUNNER.build_bwrap_command(**common, runtime_roots=())
+            added = [mount for mount in bwrap_mounts(argv) if mount not in bwrap_mounts(reference)]
+            self.assertEqual(
+                added,
+                [("--ro-bind", str(venv), str(venv)), ("--ro-bind", str(prefix), str(prefix))],
+            )
+            self.assertEqual(argv[argv.index("--") + 1 :], [str(link), "worker.py"])
+
+    @unittest.skipUnless(
+        Path("/usr/bin/python3").is_file()
+        and Path(os.path.realpath("/usr/bin/python3")).parts[:2] == ("/", "usr"),
+        "system Python is unavailable",
+    )
+    def test_system_interpreter_keeps_mounts_unchanged(self) -> None:
+        system_python = os.path.realpath("/usr/bin/python3")
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, clone, scratch = self.interpreter_attempt_dirs(Path(temporary))
+            with mock.patch.object(RUNNER.sys, "executable", "/usr/bin/python3"):
+                interpreter, roots = RUNNER.runner_helper_interpreter(
+                    repo_root=repo, clone_dir=clone, scratch_dir=scratch
+                )
+                captured, error = self.collect_with_fake_sandbox(repo, clone, scratch)
+            self.assertEqual((interpreter, roots), (system_python, ()))
+            self.assertIsNone(error)
+            common = {
+                "bwrap_bin": "/usr/bin/bwrap",
+                "clone_dir": clone,
+                "scratch_dir": scratch,
+                "command": [system_python, "-c", "pass"],
+                "env_vars": {},
+                "writable_clone": True,
+            }
+            self.assertEqual(bwrap_mounts(captured[0]), bwrap_mounts(RUNNER.build_bwrap_command(**common)))
+            self.assertEqual(
+                RUNNER.require_worker_executable("/usr/bin/python3"),
+                RUNNER.require_executable("worker", "/usr/bin/python3"),
+            )
+            self.assertIsNone(
+                RUNNER.venv_interpreter_runtime_roots(
+                    Path(system_python), repo_root=repo, clone_dir=clone, scratch_dir=scratch
+                )
+            )
+
+    def test_interpreter_runtime_roots_are_refused_before_bubblewrap(self) -> None:
+        def helper_case(root: Path, interpreter_of: Any, **environment: str) -> tuple[str, Any]:
+            repo, clone, scratch = self.interpreter_attempt_dirs(root)
+            interpreter = interpreter_of(root, repo, clone, scratch)
+            with (
+                mock.patch.dict(os.environ, environment),
+                mock.patch.object(RUNNER.sys, "executable", str(interpreter)),
+            ):
+                captured, error = self.collect_with_fake_sandbox(repo, clone, scratch)
+            self.assertEqual(captured, [], "Bubblewrap started despite a refused runtime root")
+            return "helper", error
+
+        def venv_case(root: Path, venv_of: Any) -> tuple[str, Any]:
+            repo, clone, scratch = self.interpreter_attempt_dirs(root)
+            link = venv_of(root, repo, clone, scratch)
+            try:
+                RUNNER.venv_interpreter_runtime_roots(
+                    link, repo_root=repo, clone_dir=clone, scratch_dir=scratch
+                )
+            except RUNNER.RunnerError as error:
+                return "venv", error
+            return "venv", None
+
+        def flat_interpreter(root: Path) -> Path:
+            interpreter = root / "flat-runtime" / "python3"
+            interpreter.parent.mkdir()
+            interpreter.write_text("#!/bin/sh\n", encoding="utf-8")
+            interpreter.chmod(0o755)
+            return interpreter
+
+        cases = {
+            "helper inside the clone": (
+                lambda root: helper_case(
+                    root, lambda _r, _repo, clone, _s: make_fake_python_runtime(clone / "python")
+                ),
+                "lies inside the clone",
+            ),
+            "helper inside the scratch": (
+                lambda root: helper_case(
+                    root, lambda _r, _repo, _c, scratch: make_fake_python_runtime(scratch / "python")
+                ),
+                "lies inside the scratch",
+            ),
+            "helper runtime without bin and lib": (
+                lambda root: helper_case(root, lambda r, *_: flat_interpreter(r)),
+                "no standard-library prefix",
+            ),
+            "helper prefix containing HOME": (
+                lambda root: helper_case(
+                    root,
+                    lambda r, *_: make_fake_python_runtime(r / "python"),
+                    HOME=str(root / "python" / "home"),
+                ),
+                "contains the HOME path",
+            ),
+            "helper prefix containing CODEX_HOME": (
+                lambda root: helper_case(
+                    root,
+                    lambda r, *_: make_fake_python_runtime(r / "python"),
+                    CODEX_HOME=str(root / "python" / "codex"),
+                ),
+                "contains the CODEX_HOME path",
+            ),
+            "helper prefix containing the repository": (
+                lambda root: helper_case(root, lambda r, *_: make_fake_python_runtime(r)),
+                "contains the repository path",
+            ),
+            "venv inside the clone": (
+                lambda root: venv_case(
+                    root,
+                    lambda r, _repo, clone, _s: make_fake_venv(
+                        clone / "venv", make_fake_python_runtime(r / "python")
+                    ),
+                ),
+                "lies inside the clone",
+            ),
+            "venv equal to the repository": (
+                lambda root: venv_case(
+                    root,
+                    lambda r, repo, _c, _s: make_fake_venv(repo, make_fake_python_runtime(r / "python")),
+                ),
+                "contains the repository path",
+            ),
+            "venv base without bin and lib": (
+                lambda root: venv_case(root, lambda r, *_: make_fake_venv(r / "venv", flat_interpreter(r))),
+                "no standard-library prefix",
+            ),
+            "venv configuration naming another base": (
+                lambda root: venv_case(
+                    root,
+                    lambda r, *_: make_fake_venv(
+                        r / "venv", make_fake_python_runtime(r / "python"), home=r / "other" / "bin"
+                    ),
+                ),
+                "does not link to the base interpreter",
+            ),
+        }
+        for label, (run_case, pattern) in cases.items():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temporary:
+                _kind, error = run_case(Path(temporary))
+                self.assertIsInstance(error, RUNNER.RunnerError)
+                self.assertRegex(str(error), pattern)
 
     def test_exact_scope_denies_all_unscoped_mutations_during_worker_execution(self) -> None:
         temporary, repo, plan_path = self.make_repo(

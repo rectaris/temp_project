@@ -187,6 +187,7 @@ SANDBOX_SYSTEM_FILES = (
     "/etc/resolv.conf",
 )
 SANDBOX_SYSTEM_OPTIONAL_DIRECTORIES = ("/etc/ssl", "/etc/alternatives")
+PYVENV_CONFIG_LIMIT_BYTES = 64 * 1024
 ARTIFACT_NAMES = (
     "worker.stdout",
     "worker.stderr",
@@ -3046,6 +3047,143 @@ def classify_codex_unavailability(stdout: bytes, stderr: bytes) -> str | None:
     return reasons.pop() if len(reasons) == 1 else None
 
 
+def is_sandbox_system_path(path: Path) -> bool:
+    return any(path_is_within(Path(root), path) for root in SANDBOX_SYSTEM_DIRECTORIES)
+
+
+def interpreter_standard_library_prefix(interpreter: Path, version: tuple[int, int]) -> Path | None:
+    """Return the installation prefix whose lib/pythonX.Y holds this interpreter's standard library."""
+    if interpreter.parent.name != "bin":
+        return None
+    prefix = interpreter.parent.parent
+    if prefix == Path("/"):
+        return None
+    landmark = prefix / "lib" / f"python{version[0]}.{version[1]}" / "os.py"
+    if not landmark.is_file() or not path_is_within(prefix, landmark):
+        return None
+    return prefix
+
+
+def admit_interpreter_runtime_root(
+    root: Path, *, repo_root: Path, clone_dir: Path, scratch_dir: Path
+) -> Path:
+    """Refuse a runtime root that would expose protected or attempt-owned host paths."""
+    if not root.is_absolute() or os.path.realpath(root) != str(root) or not root.is_dir():
+        raise RunnerError(f"interpreter runtime root must be a canonical existing directory: {root}")
+    protected = (
+        ("HOME", Path.home()),
+        ("CODEX_HOME", host_codex_home_path()),
+        ("repository", repo_root),
+        ("clone", clone_dir),
+        ("scratch", scratch_dir),
+    )
+    for label, path in protected:
+        if path_is_within(root, path):
+            raise RunnerError(f"interpreter runtime root {root} equals or contains the {label} path")
+    for label, path in (("clone", clone_dir), ("scratch", scratch_dir)):
+        if path_is_within(path, root):
+            raise RunnerError(f"interpreter runtime root {root} lies inside the {label}")
+    return root
+
+
+def runner_helper_interpreter(
+    *, repo_root: Path, clone_dir: Path, scratch_dir: Path
+) -> tuple[str, tuple[Path, ...]]:
+    """Return the canonical runner interpreter and the runtime root the sandbox must mount for it."""
+    interpreter = Path(os.path.realpath(sys.executable)) if sys.executable else Path()
+    if not interpreter.is_absolute() or not interpreter.is_file():
+        raise RunnerError("runner interpreter is unavailable for sandboxed helpers")
+    if is_sandbox_system_path(interpreter):
+        return str(interpreter), ()
+    prefix = interpreter_standard_library_prefix(interpreter, (sys.version_info[0], sys.version_info[1]))
+    if prefix is None:
+        raise RunnerError(
+            f"runner interpreter {interpreter} has no standard-library prefix the sandbox can mount"
+        )
+    return str(interpreter), (
+        admit_interpreter_runtime_root(
+            prefix, repo_root=repo_root, clone_dir=clone_dir, scratch_dir=scratch_dir
+        ),
+    )
+
+
+def venv_root_of_interpreter_link(executable: Path) -> Path | None:
+    """Return the venv root of an absolute bin/ interpreter link beside a pyvenv.cfg."""
+    if not executable.is_absolute() or not executable.is_symlink() or executable.parent.name != "bin":
+        return None
+    venv_root = executable.parent.parent
+    return venv_root if (venv_root / "pyvenv.cfg").is_file() else None
+
+
+def read_pyvenv_config(config: Path) -> dict[str, str]:
+    with config.open("rb") as handle:
+        raw = handle.read(PYVENV_CONFIG_LIMIT_BYTES + 1)
+    if len(raw) > PYVENV_CONFIG_LIMIT_BYTES:
+        raise RunnerError(f"venv configuration exceeds {PYVENV_CONFIG_LIMIT_BYTES} bytes: {config}")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RunnerError(f"venv configuration is not UTF-8: {config}") from error
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            values[key.strip().lower()] = value.strip()
+    return values
+
+
+def venv_interpreter_runtime_roots(
+    executable: Path, *, repo_root: Path, clone_dir: Path, scratch_dir: Path
+) -> tuple[Path, ...] | None:
+    """Admit the venv root and base prefix of a venv interpreter link; None for any other executable."""
+    venv_root = venv_root_of_interpreter_link(executable)
+    if venv_root is None:
+        return None
+    config = venv_root / "pyvenv.cfg"
+    values = read_pyvenv_config(config)
+    interpreter = Path(os.path.realpath(executable))
+    home = values.get("home", "")
+    if not home or not interpreter.is_file() or Path(os.path.realpath(home)) != interpreter.parent:
+        raise RunnerError(
+            f"venv interpreter {executable} does not link to the base interpreter named by {config}"
+        )
+    version = re.fullmatch(
+        r"(\d+)\.(\d+)(?:\.\S*)?", values.get("version_info") or values.get("version") or ""
+    )
+    if version is None:
+        raise RunnerError(f"venv configuration does not name the base interpreter version: {config}")
+    roots = [
+        admit_interpreter_runtime_root(
+            venv_root, repo_root=repo_root, clone_dir=clone_dir, scratch_dir=scratch_dir
+        )
+    ]
+    if not is_sandbox_system_path(interpreter):
+        prefix = interpreter_standard_library_prefix(
+            interpreter, (int(version.group(1)), int(version.group(2)))
+        )
+        if prefix is None:
+            raise RunnerError(
+                f"venv base interpreter {interpreter} has no standard-library prefix the sandbox can mount"
+            )
+        roots.append(
+            admit_interpreter_runtime_root(
+                prefix, repo_root=repo_root, clone_dir=clone_dir, scratch_dir=scratch_dir
+            )
+        )
+    return tuple(roots)
+
+
+def require_worker_executable(configured: str) -> str:
+    """Keep a venv interpreter link unresolved so the custom worker starts inside its venv."""
+    if os.sep in configured:
+        path = Path(os.path.abspath(configured))
+        if venv_root_of_interpreter_link(path) is not None:
+            if not path.is_file() or not os.access(path, os.X_OK):
+                raise RunnerError(f"worker executable is unavailable: {configured}")
+            return str(path)
+    return require_executable("worker", configured)
+
+
 def build_bwrap_command(
     *,
     bwrap_bin: str,
@@ -3059,6 +3197,7 @@ def build_bwrap_command(
     read_only_inputs: Sequence[Path] = (),
     read_only_shadows: Sequence[tuple[Path, Path]] = (),
     network_enabled: bool = True,
+    runtime_roots: Sequence[Path] | None = None,
 ) -> list[str]:
     argv = [
         bwrap_bin,
@@ -3096,7 +3235,16 @@ def build_bwrap_command(
     required_paths = [clone_dir, scratch_dir, *read_only_inputs, *(source for source, _ in read_only_shadows)]
     executable = Path(command[0]) if command else Path()
     runtime_root: Path | None = None
-    if executable.is_absolute() and not any(path_is_within(Path(root), executable) for root in SANDBOX_SYSTEM_DIRECTORIES) and not any(
+    if runtime_roots is not None:
+        # Admitted interpreter runtime roots replace the executable heuristic below.
+        for root in runtime_roots:
+            if is_sandbox_system_path(root):
+                continue
+            for parent in reversed(root.parents):
+                if parent != Path("/"):
+                    argv.extend(("--dir", str(parent)))
+            argv.extend(("--ro-bind", str(root), str(root)))
+    elif executable.is_absolute() and not any(path_is_within(Path(root), executable) for root in SANDBOX_SYSTEM_DIRECTORIES) and not any(
         path_is_within(visible, executable) for visible in (clone_dir, scratch_dir)
     ):
         runtime_root = next(
@@ -3121,7 +3269,7 @@ def build_bwrap_command(
         for path in read_only_inputs
         if not any(path_is_within(visible, path) for visible in (clone_dir, scratch_dir))
     ]
-    if executable.is_absolute() and runtime_root is None and not any(
+    if runtime_roots is None and executable.is_absolute() and runtime_root is None and not any(
         path_is_within(visible, executable) for visible in (clone_dir, scratch_dir)
     ) and not any(path_is_within(Path(root), executable) for root in SANDBOX_SYSTEM_DIRECTORIES):
         external_files.append(executable)
@@ -3440,6 +3588,7 @@ def sanitize_process_env() -> dict[str, str]:
 def collect_candidate_patch_in_sandbox(
     *,
     bwrap_bin: str,
+    repo_root: Path,
     git_bin: str,
     clone_dir: Path,
     scratch_dir: Path,
@@ -3488,8 +3637,12 @@ def collect_candidate_patch_in_sandbox(
         Path(refs_path).write_bytes(refs)
         """
     )
+    interpreter, runtime_roots = runner_helper_interpreter(
+        repo_root=repo_root, clone_dir=clone_dir, scratch_dir=scratch_dir
+    )
     command = [
-        sys.executable,
+        interpreter,
+        "-I",
         "-c",
         helper,
         git_bin,
@@ -3507,6 +3660,7 @@ def collect_candidate_patch_in_sandbox(
             command=command,
             env_vars=env_vars,
             writable_clone=True,
+            runtime_roots=runtime_roots,
         ),
         cwd=clone_dir,
         env=sanitize_process_env(),
@@ -3588,6 +3742,7 @@ def execute_isolated_attempt(
     stdin: bytes | None = None
     last_message_path = scratch_dir / "worker-last-message.txt"
     read_only_inputs: list[Path] = [contract_path]
+    runtime_roots: tuple[Path, ...] | None = None
     correction_brief_path: Path | None = None
     if correction_brief is not None:
         correction_brief_path = scratch_dir / "correction-brief.txt"
@@ -3625,6 +3780,12 @@ def execute_isolated_attempt(
         ).encode("utf-8")
     else:
         command = [custom_command[0]]
+        runtime_roots = venv_interpreter_runtime_roots(
+            Path(custom_command[0]),
+            repo_root=repo_root,
+            clone_dir=clone_dir,
+            scratch_dir=scratch_dir,
+        )
         explicit_root = scratch_dir / "explicit-inputs"
         for index, item in enumerate(custom_command[1:]):
             item_path = Path(item)
@@ -3681,6 +3842,7 @@ def execute_isolated_attempt(
                 visible_paths=(clone_dir, scratch_dir),
             ),
             read_only_inputs=read_only_inputs,
+            runtime_roots=runtime_roots,
         ),
         cwd=repo_root,
         env=sanitize_process_env(),
@@ -4102,7 +4264,7 @@ def run_worker(args: argparse.Namespace) -> int:
                     )
                 selected = fallback
         else:
-            worker_binary = require_executable("worker", args.worker_binary)
+            worker_binary = require_worker_executable(args.worker_binary)
             selected = execute_isolated_attempt(
                 workspace=workspace,
                 label="custom",
@@ -4151,6 +4313,7 @@ def run_worker(args: argparse.Namespace) -> int:
 
         patch_bytes, clone_head_after_worker, refs_after_worker = collect_candidate_patch_in_sandbox(
             bwrap_bin=bwrap_bin,
+            repo_root=repo_root,
             git_bin=git_bin,
             clone_dir=selected["clone_dir"],
             scratch_dir=selected["scratch_dir"],
@@ -5416,7 +5579,7 @@ def correct_worker(args: argparse.Namespace) -> int:
             "correction_brief": brief,
         }
         if args.worker_binary is not None:
-            worker_binary = require_executable("worker", args.worker_binary)
+            worker_binary = require_worker_executable(args.worker_binary)
             selected = execute_isolated_attempt(
                 **common,
                 label="custom",
@@ -5532,6 +5695,7 @@ def correct_worker(args: argparse.Namespace) -> int:
         )
         patch_bytes, clone_head_after_worker, refs_after_worker = collect_candidate_patch_in_sandbox(
             bwrap_bin=bwrap_bin,
+            repo_root=repo_root,
             git_bin=git_bin,
             clone_dir=selected["clone_dir"],
             scratch_dir=selected["scratch_dir"],
