@@ -73,6 +73,8 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:24d60fbb31f397e30d1b9de6d509aebbe69207d3cd4e56352b8174f9cb57d09e","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
 integration_gates:
   - docs/plan/checked/2026/09/16-31/410-resolve-codex-runner-through-capability-registry.md
+replan_reason_codes:
+  - scope_drift
 checked_summary_ja: 名前付きの実行構成を、違う次元の集合で分類して比べられるようにし、schema 1 の比較はそのまま保つ。
 
 ## Decisions
