@@ -1,6 +1,6 @@
 # Compare named run configurations by the exact dimensions that differ, keeping schema-1 comparisons unchanged
 
-status: backlog
+status: in_progress
 primary_invariant: A schema-2 comparison attributes an effect to one dimension only when exactly that declared dimension differs between a pair, reports identical configurations as replication with the recommendation withheld, and every schema-1 protocol and observation is judged exactly as before.
 task_types:
   - harness_evaluation
