@@ -1,6 +1,6 @@
 # Keep one plan-id reservation per authoring target so rechecking a revised input never skips identifiers
 
-status: backlog
+status: in_progress
 primary_invariant: A task worktree holds at most one unwritten plan-id reservation per target lifecycle and slug, rechecking a revised input for that target keeps its identifier, and publishing the worktree leaves none of its unwritten reservations behind.
 task_types:
   - task_worktrees
