@@ -1,6 +1,6 @@
 # Let one owner authorization given at plan start cover each same-plan continuation up to the fourth review
 
-status: in_progress
+status: checked
 primary_invariant: A same-plan continuation proceeds without a new owner message only when the owner recorded a standing authorization for that exact plan and execution genesis before its first formal review; every continuation still writes its own bound authorization record, the cumulative four-review limit is unchanged, and the stop after the fourth review always needs a fresh owner decision.
 task_types:
   - planning_docs
@@ -88,12 +88,22 @@ checked_summary_ja: プランの開始時にオーナーが一度だけ与えた
 
 ## Tasks
 
-- [ ] Before product edits, prepare the parent-direct execution ledger with prepare-parent-direct, record the review-route check, and record the unchanged baseline results of the focused suites.
-- [ ] Implement the standing-authorization and derive commands and their refusals in both copies.
-- [ ] Add cases for creation before and after a review, wrong plan or genesis, a second record, derivation for epochs 1 to 3, schema-4 refusal and the unchanged path without a standing record.
-- [ ] State the standing rule in AGENTS.md, the generated AGENTS body, both Review-Finding Budgets sections, both orchestration copies, both orchestrator skills, the root policy checker and CHANGELOG.md.
-- [ ] Record a passing adversarial preflight, obtain independent review through a fresh read-only Codex reviewer whose first prompt carries the ReviewPacket marker, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
+- [x] Before product edits, prepare the parent-direct execution ledger with prepare-parent-direct, record the review-route check, and record the unchanged baseline results of the focused suites.
+- [x] Implement the standing-authorization and derive commands and their refusals in both copies.
+- [x] Add cases for creation before and after a review, wrong plan or genesis, a second record, derivation for epochs 1 to 3, schema-4 refusal and the unchanged path without a standing record.
+- [x] State the standing rule in AGENTS.md, the generated AGENTS body, both Review-Finding Budgets sections, both orchestration copies, both orchestrator skills, the root policy checker and CHANGELOG.md.
+- [x] Record a passing adversarial preflight, obtain independent review through a fresh read-only Codex reviewer whose first prompt carries the ReviewPacket marker, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
 
 ## Validation Notes
 
 - Owner instruction on 2026-09-26 asked to define these environment and workflow changes as rules and to create plans for them: create each task worktree's .venv with uv, let Bubblewrap run the .venv Python, replace the retired gpt-5.3-codex-spark with gpt-5.6-terra medium, fix the check-time plan-id reservations, and approve continuations up to the fourth review once at plan start (option A).
+- Baseline: all 267 existing execution-state tests, root policy and Copier template checks passed before product edits.
+- Parent-direct implementation was prepared against source `2309d6c19051518a866a10127c6a297e87cbf060`. Each epoch had a distinct runtime-proven read-only route probe and exact-target adversarial preflight. No writable helper was used.
+- Formal review 1 recorded three Medium findings and stopped epoch 0: interrupted registration could mint a replacement, interrupted derivation could leave usable authorization without its receipt, and ordinary grouped derivation omitted group authority. The owner selected “同一プランの続行を承認する”; a separate schema-1 authorization opened epoch 1 without changing stopped evidence.
+- Formal review 2 cleared those findings but recorded one Medium path-normalization finding and stopped epoch 1. The owner selected “通算4回目のレビューまでの続行を承認する”; a separate schema-2 authorization opened epoch 2. This run never used or retroactively registered the new standing authorization.
+- Formal review 3, in a fresh read-only Codex session, reported `REVIEW-VERDICT: none`. The main session accepted the reviewed 13-file patch; no fourth review or owner-resolution exception was needed.
+- Regression proof: both interrupted-publication defects and the repository traversal escape failed before correction and passed afterward. Ten new standing cases cover those boundaries, live grouped continuation, single registration, private outputs, receipt substitutions, epoch 1–3 derivation, terminal eligibility and fresh-owner exclusions. A disposable CLI run exercised three successful derivations, verification and continuations, then refused continuation after the fourth review.
+- Focused validation passed: `python3 tests/test-plan-execution-state.py` (277 tests), `python3 scripts/check-root-agent-policy.py`, and `python3 scripts/check-copier-template.py`. Root/generated execution code and enforced policy sections remain aligned.
+- `scripts/validate-changes.py --all` passed with the pinned validation environment. Authoritative `scripts/lint-project-workflow.sh` and `tests/smoke.sh` each ran once after the clearing review and passed. Completion and archive execution gates passed before lifecycle edits.
+- Accepted implementation commit: `f308cf4cdc0f7253464ea6374f98f8ade5ca0bae`. External ledgers, authorization records, review receipts, validation output and the runtime-evidence archive are retained under `~/.local/state/project-agent-workflow/plan-420-20260927/`.
+- The transcript-import tool-count workaround produced a local template-feedback draft only; it is not part of this product change. Link changes: none.

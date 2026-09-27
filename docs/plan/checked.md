@@ -296,3 +296,4 @@ id	path
 354	docs/plan/checked/2026/09/16-31/354-score-plan-risk-from-weighted-features.md
 410	docs/plan/checked/2026/09/16-31/410-resolve-codex-runner-through-capability-registry.md
 419	docs/plan/checked/2026/09/16-31/419-keep-one-plan-id-reservation-per-authoring-target.md
+420	docs/plan/checked/2026/09/16-31/420-record-standing-owner-continuation-up-to-four-reviews.md
