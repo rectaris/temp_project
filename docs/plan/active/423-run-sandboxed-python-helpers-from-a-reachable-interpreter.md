@@ -1,6 +1,6 @@
 # Let the sandboxed runner execute its Python helpers and Python workers when the runner itself runs from a uv-managed virtual environment
 
-status: backlog
+status: in_progress
 primary_invariant: Whatever interpreter runs the sandboxed runner, every Python process it starts inside Bubblewrap receives that interpreter's real runtime read-only and nothing else beyond the existing mounts, so the runner behaves identically from the system Python and from a uv virtual environment.
 task_types:
   - template_workflow
