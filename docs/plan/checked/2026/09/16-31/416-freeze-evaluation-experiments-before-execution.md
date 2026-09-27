@@ -1,6 +1,6 @@
 # Declare evaluation experiments, run configurations, environments and benchmark cases, and freeze their digests and run matrix before execution
 
-status: in_progress
+status: checked
 primary_invariant: Resolving an experiment binds the digest of every case, run configuration, instruction asset, capability registry and environment it uses and fixes the complete run matrix before any run, without launching a model, using the network or writing outside its experiment directory.
 task_types:
   - harness_evaluation
@@ -109,13 +109,23 @@ checked_summary_ja: 評価の実験、実行構成、実行環境、ベンチマ
 
 ## Tasks
 
-- [ ] Add python3 tests/test-agent-eval.py to the root validation-command allowlist.
-- [ ] Implement the definition parsers, path confinement and deterministic fixture baselines.
-- [ ] Implement resolve with the frozen record, schema-2 protocol derivation, balanced ordering and the budget refusal.
-- [ ] Add the development suite, configurations, environment, experiment and evals/README.md.
-- [ ] Add tests/test-agent-eval.py cases for every refusal, baseline determinism, protocol acceptance, ordering and the no-execution boundary, register the sources, and run the entrypoint from scripts/lint-project-workflow.sh.
-- [ ] Obtain independent review through a fresh read-only reviewer, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
+- [x] Add python3 tests/test-agent-eval.py to the root validation-command allowlist.
+- [x] Implement the definition parsers, path confinement and deterministic fixture baselines.
+- [x] Implement resolve with the frozen record, schema-2 protocol derivation, balanced ordering and the budget refusal.
+- [x] Add the development suite, configurations, environment, experiment and evals/README.md.
+- [x] Add tests/test-agent-eval.py cases for every refusal, baseline determinism, protocol acceptance, ordering and the no-execution boundary, register the sources, and run the entrypoint from scripts/lint-project-workflow.sh.
+- [x] Obtain independent review through a fresh read-only reviewer, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
 
 ## Validation Notes
 
 - Owner instruction on 2026-09-26, 「提案の方針で進める。」, fixed a root-only controller and evidence under .agent-artifacts/evaluations/<experiment-id>/. A local probe on 2026-09-26 found that this workstation's ChatGPT-account Codex CLI refuses gpt-5.3-codex-spark, so the development configuration uses gpt-5.6-terra.
+- Integration gate: plan 415 was reconstructed into successor 386, which carries all three plan 415 acceptance items and the schema-2 protocol parser this plan derives against, and 386 is archived at docs/plan/checked/2026/09/16-31/386-compare-named-run-configurations-with-pinned-policy-digest.md. The gate was treated as satisfied through that successor. The activation commit 29b5524 also rebound plan 418's context_files entry to this plan's active path.
+- The owner started this plan on 2026-09-27 with 「@docs/plan/backlog/416-freeze-evaluation-experiments-before-execution.md について実装作業をせよ。」. Parent-direct implementation was prepared against source `29b55246fdaa89ba4ed9164c19149c4a902894e8` with `prepare-parent-direct`, a new reviewer registry and a new continuation registry, and a runtime-proven read-only route probe was recorded before product edits and again at the start of each later epoch. No writable helper was used; fresh read-only Codex sessions (gpt-5.6-sol) served as route probes and reviewers.
+- Formal review 1 (epoch 0) reported two Medium findings: harness_profile_selection accepted any list and did not bind the selected assets, and scripts/agent-eval.py wrote Python bytecode caches outside the experiment directory while the boundary test masked it with PYTHONDONTWRITEBYTECODE=1. The run stopped at descope_pending with parent_remediation_budget_exhausted. On 2026-09-27 the owner answered 「続行を承認する」 and chose 「既存の checker で検証する」 for the selection, so a selection is now either docs/agent/harness-profile.json or a document under evals/, is checked by check-harness-profile.py's own parse_catalog, parse_profile and resolve, and adds every selected asset to instruction_asset_digests.
+- Formal review 2 (epoch 1) found both corrections effective and reported two new Medium findings: run ids joined hyphen-bearing ids and could collide, and the fixture bound counted files but not directories. The run stopped again with the same reason. The owner answered 「最終続行を承認する」, and `continue-final` opened terminal epoch 2. Run ids are now `run-NNN` by execution position, files and directories share a 512-entry bound counted before sorting, confined reads open each component with O_NOFOLLOW, and the run-count, observation and file-limit refusal runs before any case content is read.
+- Formal review 3 (epoch 2) reported `REVIEW-VERDICT: none`. This plan used three of its four cumulative reviews.
+- Adversarial preflight bound to each review target passed 10, 14 and 17 throwaway cases. Among them: a symlinked evals/ root, fast-import path injection, hostile Git environment and user configuration, a component swapped to a symlink after its check, forged Harness Profile selections, colliding hyphenated ids, a directory flood, and a fresh copy of the command that writes no bytecode.
+- Regression proof: 12 of 13 targeted throwaway mutations of the implementation fail tests/test-agent-eval.py. The one that passes removes GIT_CONFIG_GLOBAL isolation, which only a hostile host configuration exposes; the adversarial host-configuration case covers it.
+- Focused validation passed once through `uv run --locked`: `python3 tests/test-agent-eval.py` (37 tests) and `python3 scripts/check-copier-template.py`. Authoritative `scripts/lint-project-workflow.sh` and `tests/smoke.sh` each ran once through `uv run --locked` after the clearing review and passed. The lint log shows the new entrypoint running its 37 tests. The completion and archive execution gates passed before the implementation commit.
+- Known limits: a resolved protocol declares no ordering evidence, so the comparison command withholds every empirical recommendation for it, and evals/README.md states this. The 256-observation limit is never the binding bound, because the 64-file limit caps one experiment at 12 runs. The elapsed budget is checked against the sum of case timeouts over all runs.
+- Accepted implementation commit: `14ea6ab`. The epoch 0, 1 and 2 ledgers, authorizations, receipts, adversarial cases, review prompts and outputs, and validation output are retained under `~/.local/state/project-agent-workflow/plan-416-20260927/`. The route and review run logs are plan-416-route-001 to 003 and plan-416-review-001 to 003, relocated at publication to `.agent-logs/retired-tasks/416-freeze-evaluation-experiments-before-execution/`. Link changes: none.

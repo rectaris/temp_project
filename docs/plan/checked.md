@@ -302,3 +302,4 @@ id	path
 422	docs/plan/checked/2026/09/16-31/422-provision-task-worktrees-with-the-locked-uv-environment.md
 423	docs/plan/checked/2026/09/16-31/423-run-sandboxed-python-helpers-from-a-reachable-interpreter.md
 386	docs/plan/checked/2026/09/16-31/386-compare-named-run-configurations-with-pinned-policy-digest.md
+416	docs/plan/checked/2026/09/16-31/416-freeze-evaluation-experiments-before-execution.md
