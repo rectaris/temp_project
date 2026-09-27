@@ -36,6 +36,20 @@ root checks in that same environment with
 Alternatively, activate `.venv` with `. .venv/bin/activate` before invoking the
 bare validation commands. The wrappers deliberately use the caller's Python
 environment rather than selecting or installing another one.
+
+Run the declared root validation commands unchanged inside the task worktree's
+own environment, through `uv run --locked` or an activated `.venv` of that
+worktree. Never borrow another checkout's environment, for example by putting
+the main checkout's `.venv/bin` on `PATH`, because its packages need not match
+this worktree's `uv.lock`. `scripts/manage-plan-worktrees.py prepare` creates
+the environment of a new task worktree that carries both `pyproject.toml` and
+`uv.lock` with `uv sync --locked --no-python-downloads`, pinned to the default
+user uv cache through an explicit `--cache-dir`. A failed sync makes
+preparation exit nonzero with the retry command, and preparing or resuming
+that worktree keeps refusing until `uv sync --locked --check` confirms that its
+`.venv` matches `uv.lock`.
+Plans keep declaring the unprefixed commands; this rule governs how the parent
+executes them.
 The required root lint and change-aware selector run the same check.
 Ruff 0.15.7 checks Python files under `scripts/`, `tests/` and
 `template/.project-agent-workflow/scripts/`, excluding dependency/cache directories.

@@ -17,6 +17,9 @@ import argparse
 import importlib.util
 import os
 import json
+import shlex
+import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -112,6 +115,29 @@ SUPPORTED_PROFILE_MARKERS = (
     PurePosixPath("scripts/check-copier-template.py"),
     PurePosixPath(".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"),
 )
+
+# A new task worktree of a uv-locked project gets its own environment synced
+# exactly to the lock file before it is reported. The sync never downloads an
+# interpreter, runs with the worktree as its working directory, ignores an
+# inherited environment, project or cache selection, and names the default user
+# cache explicitly, so no variable or configuration file can move its
+# persistent writes away from the worktree's .venv and that cache.
+UV_PROJECT_FILES = ("pyproject.toml", "uv.lock")
+UV_SYNC_ARGUMENTS = ("sync", "--locked", "--no-python-downloads")
+UV_CHECK_ARGUMENTS = ("sync", "--locked", "--check", "--no-python-downloads")
+UV_ISOLATED_VARIABLES = (
+    "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "UV_PROJECT", "UV_CACHE_DIR", "UV_NO_CACHE",
+)
+# The default user cache is what uv reports with every configuration file and
+# every cache-selecting variable ignored.
+UV_CACHE_RESOLUTION_ARGUMENTS = ("--no-config", "cache", "dir")
+UV_CACHE_RESOLUTION_EXCLUDED = ("UV_CONFIG_FILE",)
+UV_CACHE_RESOLUTION_TIMEOUT_SECONDS = 30
+SESSION_MEMBER_ENVIRONMENT_REASON = (
+    "schema-2 member worktree is not provisioned, because member retirement "
+    "refuses ignored files such as .venv"
+)
+UV_SYNC_TIMEOUT_SECONDS = 600
 
 
 def validate_allowed_root(raw: str, repository: Path) -> Path:
@@ -568,6 +594,195 @@ def normalize_required_hook_modes(
         normalize_hook_mode(worktree, relative)
 
 
+def environment_retry_command(worktree: Path) -> str:
+    """The exact command that repeats the locked sync for a kept worktree.
+
+    It refuses a .venv symbolic link before uv can write through it, so
+    following it never writes outside the worktree's own .venv.
+    """
+
+    unset = " ".join(f"-u {name}" for name in UV_ISOLATED_VARIABLES)
+    resolution_unset = " ".join(
+        f"-u {name}" for name in (*UV_ISOLATED_VARIABLES, *UV_CACHE_RESOLUTION_EXCLUDED)
+    )
+    return (
+        f"cd {shlex.quote(str(worktree))} && test ! -L .venv && "
+        f'cache="$(env {resolution_unset} uv {" ".join(UV_CACHE_RESOLUTION_ARGUMENTS)})" && '
+        f'env {unset} uv {" ".join(UV_SYNC_ARGUMENTS)} --cache-dir "$cache"'
+    )
+
+
+def absent_project_files(worktree: Path) -> dict[str, Any] | None:
+    """The skip outcome for a checkout that is not a uv-locked project."""
+
+    absent = [name for name in UV_PROJECT_FILES if not os.path.lexists(worktree / name)]
+    if not absent:
+        return None
+    return {"status": "skipped", "reason": " and ".join(absent) + " absent from the checkout"}
+
+
+def environment_failure(worktree: Path, reason: str) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "reason": reason,
+        "retry_command": environment_retry_command(worktree),
+    }
+
+
+def default_user_cache(
+    uv: str, worktree: Path, environment: dict[str, str]
+) -> tuple[str | None, str | None]:
+    """Resolve the default user uv cache; return it or why it could not be resolved."""
+
+    command = "uv " + " ".join(UV_CACHE_RESOLUTION_ARGUMENTS)
+    try:
+        resolved = subprocess.run(
+            [uv, *UV_CACHE_RESOLUTION_ARGUMENTS],
+            cwd=worktree,
+            env={
+                name: value
+                for name, value in environment.items()
+                if name not in UV_CACHE_RESOLUTION_EXCLUDED
+            },
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=UV_CACHE_RESOLUTION_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None, (
+            f"{command} did not finish within {UV_CACHE_RESOLUTION_TIMEOUT_SECONDS} seconds"
+        )
+    except OSError as exc:
+        return None, f"uv could not be started: {exc}"
+    cache = resolved.stdout.strip()
+    if resolved.returncode != 0 or "\n" in cache or not os.path.isabs(cache):
+        return None, f"{command} did not report an absolute default user cache"
+    return cache, None
+
+
+def run_isolated_uv(worktree: Path, arguments: tuple[str, ...]) -> str | None:
+    """Run one bounded uv command in the worktree; return why it failed, if it did."""
+
+    uv = shutil.which("uv")
+    if uv is None:
+        return "uv is not installed or not on PATH"
+    command = "uv " + " ".join(arguments)
+    environment = {
+        name: value for name, value in os.environ.items() if name not in UV_ISOLATED_VARIABLES
+    }
+    cache, failure = default_user_cache(uv, worktree, environment)
+    if cache is None:
+        return failure
+    try:
+        # uv progress goes to descriptor 2 so the JSON report stays the only
+        # stdout, whatever object currently stands in for sys.stderr.
+        process = subprocess.Popen(
+            [uv, *arguments, "--cache-dir", cache],
+            cwd=worktree,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=2,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        return f"uv could not be started: {exc}"
+    try:
+        returncode = process.wait(timeout=UV_SYNC_TIMEOUT_SECONDS)
+    except BaseException as exc:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        if isinstance(exc, subprocess.TimeoutExpired):
+            return f"{command} did not finish within {UV_SYNC_TIMEOUT_SECONDS} seconds"
+        raise
+    if returncode != 0:
+        return f"{command} exited with status {returncode}"
+    return None
+
+
+def provision_environment(worktree: Path) -> dict[str, Any]:
+    """Sync a newly created worktree's .venv exactly to its committed uv.lock.
+
+    A checkout without both project files is left exactly as before. Every
+    other outcome that is not a completed sync is reported as a failure with
+    the retry command, so an unprovisioned worktree is never silently used.
+    """
+
+    skipped = absent_project_files(worktree)
+    if skipped is not None:
+        return skipped
+    venv = worktree / ".venv"
+    if os.path.lexists(venv):
+        return environment_failure(worktree, ".venv already exists in the new checkout")
+    failure = run_isolated_uv(worktree, UV_SYNC_ARGUMENTS)
+    if failure is not None:
+        return environment_failure(worktree, failure)
+    if venv.is_symlink() or not venv.is_dir():
+        return environment_failure(
+            worktree, "uv sync --locked did not create the worktree's .venv directory"
+        )
+    return {
+        "status": "synced",
+        "command": "uv " + " ".join(UV_SYNC_ARGUMENTS),
+        "environment": str(venv),
+    }
+
+
+def resumed_environment(worktree: Path) -> dict[str, Any]:
+    """Refuse to resume a uv-locked worktree whose .venv does not match uv.lock.
+
+    Resuming never re-syncs, so a creation whose sync failed, timed out or was
+    killed would otherwise hand back a missing or partial environment as if it
+    were ready. uv's own read-only check decides instead of the mere presence
+    of a .venv directory, and the retry command clears the refusal.
+    """
+
+    skipped = absent_project_files(worktree)
+    if skipped is not None:
+        return skipped
+    if (worktree / ".venv").is_symlink():
+        return environment_failure(
+            worktree, "the worktree's .venv is a symbolic link; remove it before retrying"
+        )
+    failure = run_isolated_uv(worktree, UV_CHECK_ARGUMENTS)
+    if failure is not None:
+        return environment_failure(
+            worktree, f"resumed worktree's .venv is not synced to uv.lock: {failure}"
+        )
+    return {
+        "status": "skipped",
+        "reason": "resumed worktree is not re-synced; uv sync --locked --check confirmed its .venv",
+    }
+
+
+def session_member_worktree(repository: Path, args: argparse.Namespace) -> bool:
+    group = guard.parallel_group_module()
+    if group is None:
+        return False
+    try:
+        return group.session_enrolment(repository, getattr(args, "plan", None)) is not None
+    except group.GroupError as exc:
+        raise WorktreeError(str(exc)) from exc
+
+
+def report_environment_failure(result: dict[str, Any]) -> None:
+    """Refuse a worktree whose locked environment could not be synced."""
+
+    environment = result["environment"]
+    if environment["status"] != "failed":
+        return
+    raise WorktreeError(
+        f"task worktree environment provisioning failed: {environment['reason']}. "
+        f"The worktree {result['worktree']} and its ownership record were kept; "
+        f"retry the locked sync with: {environment['retry_command']}"
+    )
+
+
 def create_worktree(
     repository: Path,
     allowed_root: Path,
@@ -864,12 +1079,16 @@ def create(args: argparse.Namespace) -> None:
             paths,
             identity,
         )
-    print(
-        json.dumps(
-            {"operation": "create", "record": str(paths["record"]), **record},
-            sort_keys=True,
-        )
-    )
+        environment = provision_environment(Path(record["worktree_path"]))
+    result = {
+        "operation": "create",
+        "record": str(paths["record"]),
+        **record,
+        "worktree": record["worktree_path"],
+        "environment": environment,
+    }
+    print(json.dumps(result, sort_keys=True))
+    report_environment_failure(result)
 
 
 def refresh_lease(
@@ -937,6 +1156,7 @@ def prepare_ungrouped(args: argparse.Namespace, *, emit: bool = True) -> dict[st
     identity = repository_identity(repository)
     paths = metadata_paths(identity, task)
     ensure_metadata_directory(paths["directory"])
+    session_member = session_member_worktree(repository, args)
     with locked_file(paths["lock"]):
         if paths["record"].exists():
             record = read_task_record(paths)
@@ -957,9 +1177,15 @@ def prepare_ungrouped(args: argparse.Namespace, *, emit: bool = True) -> dict[st
                         "source_ref": updated["source_ref"],
                         "task": task_label(updated["task"]),
                         "accepted_tip": tip,
+                        "environment": (
+                            {"status": "skipped", "reason": SESSION_MEMBER_ENVIRONMENT_REASON}
+                            if session_member
+                            else resumed_environment(target)
+                        ),
                     }
             if emit:
                 print(json.dumps(result, sort_keys=True))
+            report_environment_failure(result)
             return result
         reject_retired_record(paths)
         default_target, default_branch = default_placement(task, allowed_root)
@@ -987,6 +1213,11 @@ def prepare_ungrouped(args: argparse.Namespace, *, emit: bool = True) -> dict[st
             paths,
             identity,
         )
+        environment = (
+            {"status": "skipped", "reason": SESSION_MEMBER_ENVIRONMENT_REASON}
+            if session_member
+            else provision_environment(Path(record["worktree_path"]))
+        )
     result = {
                 "operation": "prepare",
                 "outcome": "created",
@@ -996,9 +1227,11 @@ def prepare_ungrouped(args: argparse.Namespace, *, emit: bool = True) -> dict[st
                 "source_ref": record["source_ref"],
                 "task": task_label(record["task"]),
                 "accepted_tip": record["accepted_tip"],
+                "environment": environment,
             }
     if emit:
         print(json.dumps(result, sort_keys=True))
+    report_environment_failure(result)
     return result
 
 
@@ -1112,20 +1345,18 @@ def resume(args: argparse.Namespace) -> None:
         updated, target, tip = refresh_lease(
             repository, allowed_root, record, paths, args.owner_id, args.lease_seconds
         )
-    print(
-        json.dumps(
-            {
-                "operation": "resume",
-                "record": str(paths["record"]),
-                "worktree": str(target),
-                "branch_ref": updated["branch_ref"],
-                "source_ref": updated["source_ref"],
-                "accepted_tip": tip,
-                "status_digest": status_digest(target),
-            },
-            sort_keys=True,
-        )
-    )
+    result = {
+        "operation": "resume",
+        "record": str(paths["record"]),
+        "worktree": str(target),
+        "branch_ref": updated["branch_ref"],
+        "source_ref": updated["source_ref"],
+        "accepted_tip": tip,
+        "status_digest": status_digest(target),
+        "environment": resumed_environment(target),
+    }
+    print(json.dumps(result, sort_keys=True))
+    report_environment_failure(result)
 
 
 EVIDENCE_DIRECTORIES = (".agent-logs", ".agent-artifacts")

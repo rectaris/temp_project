@@ -1347,6 +1347,10 @@ class ParentDirectMemberHandoffTest(unittest.TestCase):
         git(self.repository, "config", "user.email", "worktree@example.invalid")
         git(self.repository, "remote", "add", "origin", "git@github.com:example/project.git")
         (self.repository / "file.txt").write_text("baseline\n", encoding="utf-8")
+        # A uv-locked project: member worktrees must still prepare, hand off
+        # and retire, which a provisioned .venv would block.
+        for name in ("pyproject.toml", "uv.lock"):
+            (self.repository / name).write_text(f"# fixture {name}\n", encoding="utf-8")
         self.group = GUARD_MODULE.parallel_group_module()
         members = []
         for path, scope in ((self.PLAN, "file.txt"), (self.PARTNER, "src/partner.py")):
@@ -1469,6 +1473,19 @@ class ParentDirectMemberHandoffTest(unittest.TestCase):
         )
 
     # -- cases ----------------------------------------------------------
+
+    def test_member_worktree_of_a_uv_locked_project_is_not_provisioned(self) -> None:
+        member = self.session("session-278")
+        started = self.in_session(
+            member, self.ADAPTER, "member-start", "--state", str(self.state),
+            "--plan", self.PLAN, "--allowed-root", str(self.allowed_root),
+        )
+        self.assertEqual(started["returncode"], 0, started)
+        # The fixture project files are not a real uv project, so any sync
+        # attempt would have failed this member start.
+        worktree = Path(json.loads(started["stdout"])["worktree"])
+        self.assertTrue((worktree / "uv.lock").is_file())
+        self.assertFalse((worktree / ".venv").exists())
 
     def test_handoff_freezes_the_result_and_closes_member_writing(self) -> None:
         member = self.session("session-278")
@@ -1625,11 +1642,13 @@ class TaskWorktreeGuardTest(unittest.TestCase):
         self.created.append(paths)
         return paths
 
-    def run_command(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+    def run_command(
+        self, *arguments: str, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(SCRIPT), *arguments],
             cwd=self.repository,
-            env={**os.environ, "HOME": str(self.home)},
+            env={**os.environ, "HOME": str(self.home), **(env or {})},
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1806,6 +1825,294 @@ class TaskWorktreeGuardTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must differ from the source ref", result.stderr)
+
+    def commit_uv_project(self, *names: str) -> None:
+        for name in names:
+            (self.repository / name).write_text(f"# fixture {name}\n", encoding="utf-8")
+        git(self.repository, "add", ".")
+        git(self.repository, "commit", "-qm", "uv project files")
+
+    def fake_uv_environment(self, *, exit_status: int = 0) -> dict[str, str]:
+        """Put a recording uv first on PATH and poison the inherited selection."""
+
+        tools = self.base / "tools"
+        tools.mkdir(exist_ok=True)
+        uv = tools / "uv"
+        uv.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$*\" = '--no-config cache dir' ]; then\n"
+            "  printf '%s %s\\n' \"${UV_CONFIG_FILE-unset}\" \"${UV_CACHE_DIR-unset}\""
+            " >> \"$FAKE_UV_LOG.cache\"\n"
+            "  echo \"$FAKE_UV_CACHE\"; exit 0\n"
+            "fi\n"
+            "{\n"
+            "  printf 'argv=%s\\n' \"$*\"\n"
+            "  printf 'cwd=%s\\n' \"$(pwd -P)\"\n"
+            "  printf 'VIRTUAL_ENV=%s\\n' \"${VIRTUAL_ENV-unset}\"\n"
+            "  printf 'UV_PROJECT_ENVIRONMENT=%s\\n' \"${UV_PROJECT_ENVIRONMENT-unset}\"\n"
+            "  printf 'UV_PROJECT=%s\\n' \"${UV_PROJECT-unset}\"\n"
+            "  printf 'UV_CACHE_DIR=%s\\n' \"${UV_CACHE_DIR-unset}\"\n"
+            "} >> \"$FAKE_UV_LOG\"\n"
+            "echo 'fake uv progress'\n"
+            "case \" $* \" in\n"
+            "  *' --check '*) test -f .venv/fake-synced; exit $? ;;\n"
+            "esac\n"
+            "if [ -n \"${FAKE_UV_SLEEP-}\" ]; then sleep \"$FAKE_UV_SLEEP\"; fi\n"
+            "if [ \"${FAKE_UV_EXIT:-0}\" != 0 ]; then mkdir -p .venv; exit \"$FAKE_UV_EXIT\"; fi\n"
+            "mkdir -p .venv && touch .venv/fake-synced\n",
+            encoding="utf-8",
+        )
+        uv.chmod(0o755)
+        self.uv_log = self.base / "uv.log"
+        self.user_cache = self.base / "user-cache"
+        return {
+            "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_UV_LOG": str(self.uv_log),
+            "FAKE_UV_CACHE": str(self.user_cache),
+            "UV_CONFIG_FILE": str(self.base / "foreign-config.toml"),
+            "UV_NO_CACHE": "1",
+            "FAKE_UV_EXIT": str(exit_status),
+            "VIRTUAL_ENV": str(self.base / "foreign-venv"),
+            "UV_PROJECT_ENVIRONMENT": str(self.base / "foreign-project-env"),
+            "UV_PROJECT": str(self.base / "foreign-project"),
+            "UV_CACHE_DIR": str(self.base / "foreign-cache"),
+        }
+
+    @property
+    def sync_argv(self) -> str:
+        return f"sync --locked --no-python-downloads --cache-dir {self.user_cache}"
+
+    @property
+    def check_argv(self) -> str:
+        return f"sync --locked --check --no-python-downloads --cache-dir {self.user_cache}"
+
+    def cache_resolutions(self) -> list[str]:
+        log = Path(str(self.uv_log) + ".cache")
+        return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+    def uv_calls(self) -> list[dict[str, str]]:
+        if not self.uv_log.exists():
+            return []
+        calls: list[dict[str, str]] = []
+        for line in self.uv_log.read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            if key == "argv":
+                calls.append({})
+            calls[-1][key] = value
+        return calls
+
+    def prepare_with(self, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        self.track(plan_selector(self.plan))
+        return self.run_command(
+            "prepare", self.plan, "--allowed-root", str(self.allowed_root),
+            "--owner-id", "owner-a", env=env,
+        )
+
+    def test_prepare_syncs_a_new_uv_locked_worktree_in_isolation(self) -> None:
+        self.commit_uv_project("pyproject.toml", "uv.lock")
+        result = self.prepare_with(self.fake_uv_environment())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        created = json.loads(result.stdout)
+        worktree = Path(created["worktree"])
+        self.assertEqual(created["environment"]["status"], "synced")
+        self.assertEqual(created["environment"]["environment"], str(worktree / ".venv"))
+        self.assertTrue((worktree / ".venv").is_dir())
+        self.assertIn("fake uv progress", result.stderr)
+        self.assertEqual(
+            self.uv_calls(),
+            [{
+                "argv": self.sync_argv,
+                "cwd": str(worktree.resolve()),
+                "VIRTUAL_ENV": "unset",
+                "UV_PROJECT_ENVIRONMENT": "unset",
+                "UV_PROJECT": "unset",
+                "UV_CACHE_DIR": "unset",
+            }],
+        )
+        self.assertFalse((self.base / "foreign-venv").exists())
+        self.assertFalse((self.base / "foreign-project-env").exists())
+        self.assertFalse((self.base / "foreign-cache").exists())
+        self.assertEqual(self.cache_resolutions(), ["unset unset"])
+        self.assertFalse((self.repository / ".venv").exists())
+        GUARD_MODULE.assert_task_worktree(worktree)
+
+    def assert_provisioning_skipped(self, reason: str) -> None:
+        result = self.prepare_with(self.fake_uv_environment())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        created = json.loads(result.stdout)
+        self.assertEqual(created["outcome"], "created")
+        self.assertEqual(created["environment"], {"status": "skipped", "reason": reason})
+        self.assertFalse((Path(created["worktree"]) / ".venv").exists())
+        self.assertEqual(self.uv_calls(), [])
+
+    def test_prepare_leaves_a_project_without_uv_files_unprovisioned(self) -> None:
+        self.assert_provisioning_skipped("pyproject.toml and uv.lock absent from the checkout")
+
+    def test_prepare_skips_provisioning_without_a_lock_file(self) -> None:
+        self.commit_uv_project("pyproject.toml")
+        self.assert_provisioning_skipped("uv.lock absent from the checkout")
+
+    def test_prepare_skips_provisioning_without_a_project_file(self) -> None:
+        self.commit_uv_project("uv.lock")
+        self.assert_provisioning_skipped("pyproject.toml absent from the checkout")
+
+    def test_prepare_verifies_but_does_not_resync_when_resuming(self) -> None:
+        self.commit_uv_project("pyproject.toml", "uv.lock")
+        env = self.fake_uv_environment()
+        first = self.prepare_with(env)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        second = self.prepare_with(env)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        resumed = json.loads(second.stdout)
+        self.assertEqual(resumed["outcome"], "resumed")
+        self.assertEqual(resumed["environment"], self.CONFIRMED_RESUME)
+        self.assertEqual(
+            [call["argv"] for call in self.uv_calls()],
+            [self.sync_argv, self.check_argv],
+        )
+        self.assertEqual(self.uv_calls()[-1]["UV_CACHE_DIR"], "unset")
+
+    CONFIRMED_RESUME = {
+        "status": "skipped",
+        "reason": "resumed worktree is not re-synced; uv sync --locked --check confirmed its .venv",
+    }
+
+    def assert_failed_preparation_is_kept(
+        self, result: subprocess.CompletedProcess[str], reason: str, env: dict[str, str]
+    ) -> Path:
+        """A failed sync keeps the worktree and record but never resumes silently."""
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(reason, result.stderr)
+        report = json.loads(result.stdout)
+        worktree = Path(report["worktree"])
+        retry = report["environment"]["retry_command"]
+        self.assertEqual(report["environment"]["status"], "failed")
+        self.assertIn(reason, report["environment"]["reason"])
+        self.assertIn("retry the locked sync with: " + retry, result.stderr)
+        self.assertTrue(worktree.is_dir())
+        inspected = self.run_command("inspect", self.plan, "--allowed-root", str(self.allowed_root))
+        self.assertEqual(inspected.returncode, 0, inspected.stderr)
+        GUARD_MODULE.assert_task_worktree(worktree)
+        for resumed in (
+            self.prepare_with(env),
+            self.run_command(
+                "resume", self.plan, "--allowed-root", str(self.allowed_root),
+                "--owner-id", "owner-a", env=env,
+            ),
+        ):
+            self.assertNotEqual(resumed.returncode, 0)
+            self.assertIn("retry the locked sync with: " + retry, resumed.stderr)
+            self.assertEqual(json.loads(resumed.stdout)["environment"]["status"], "failed")
+        return worktree
+
+    def run_retry(self, retry: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["sh", "-c", retry],
+            env={**os.environ, **self.fake_uv_environment()},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def retry_and_resume(self, worktree: Path, retry: str) -> None:
+        retried = self.run_retry(retry)
+        self.assertEqual(retried.returncode, 0, retried.stderr)
+        self.assertTrue((worktree / ".venv").is_dir())
+        resumed = self.prepare_with(self.fake_uv_environment())
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertEqual(json.loads(resumed.stdout)["environment"], self.CONFIRMED_RESUME)
+
+    def test_prepare_fails_visibly_when_uv_is_missing(self) -> None:
+        self.commit_uv_project("pyproject.toml", "uv.lock")
+        tools = self.base / "git-only"
+        tools.mkdir()
+        (tools / "git").symlink_to(shutil.which("git"))
+        env = {"PATH": str(tools)}
+        result = self.prepare_with(env)
+        worktree = self.assert_failed_preparation_is_kept(
+            result, "uv is not installed or not on PATH", env
+        )
+        self.assertFalse((worktree / ".venv").exists())
+        self.retry_and_resume(worktree, json.loads(result.stdout)["environment"]["retry_command"])
+
+    def test_a_partial_venv_left_by_a_failed_sync_never_resumes(self) -> None:
+        self.commit_uv_project("pyproject.toml", "uv.lock")
+        env = self.fake_uv_environment(exit_status=3)
+        result = self.prepare_with(env)
+        worktree = self.assert_failed_preparation_is_kept(
+            result, "uv sync --locked --no-python-downloads exited with status 3", env
+        )
+        # The failed sync left a .venv directory behind; only uv's check decides.
+        self.assertTrue((worktree / ".venv").is_dir())
+        self.assertEqual(
+            [call["argv"] for call in self.uv_calls()],
+            [self.sync_argv] + [self.check_argv] * 2,
+        )
+        self.retry_and_resume(worktree, json.loads(result.stdout)["environment"]["retry_command"])
+        retried = self.uv_calls()[-2]
+        self.assertEqual(
+            retried,
+            {
+                "argv": self.sync_argv,
+                "cwd": str(worktree.resolve()),
+                "VIRTUAL_ENV": "unset",
+                "UV_PROJECT_ENVIRONMENT": "unset",
+                "UV_PROJECT": "unset",
+                "UV_CACHE_DIR": "unset",
+            },
+        )
+
+    def test_a_venv_link_is_refused_and_its_retry_never_writes_through_it(self) -> None:
+        self.commit_uv_project("pyproject.toml", "uv.lock")
+        (self.base / "elsewhere").mkdir()
+        (self.repository / ".venv").symlink_to(self.base / "elsewhere")
+        git(self.repository, "add", ".venv")
+        git(self.repository, "commit", "-qm", "tracked venv link")
+        env = self.fake_uv_environment()
+        result = self.prepare_with(env)
+        self.assert_failed_preparation_is_kept(
+            result, ".venv already exists in the new checkout", env
+        )
+        resumed = self.prepare_with(env)
+        self.assertIn(".venv is a symbolic link", resumed.stderr)
+        retried = self.run_retry(json.loads(result.stdout)["environment"]["retry_command"])
+        self.assertNotEqual(retried.returncode, 0)
+        self.assertEqual(self.uv_calls(), [])
+        self.assertEqual(list((self.base / "elsewhere").iterdir()), [])
+
+    def test_explicit_create_provisions_the_same_way(self) -> None:
+        self.commit_uv_project("pyproject.toml", "uv.lock")
+        self.track(plan_selector(self.plan))
+        target = self.allowed_root / "explicit"
+        result = self.run_command(
+            "create", self.plan, "--allowed-root", str(self.allowed_root),
+            "--owner-id", "owner-a", "--worktree", str(target), "--branch", "plan/explicit",
+            env=self.fake_uv_environment(exit_status=4),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["environment"]["status"], "failed")
+        self.assertIn("retry the locked sync with: " + report["environment"]["retry_command"], result.stderr)
+        self.assertEqual([call["argv"] for call in self.uv_calls()], [self.sync_argv])
+        self.retry_and_resume(target, report["environment"]["retry_command"])
+
+    def test_locked_sync_is_bounded_by_its_timeout(self) -> None:
+        self.commit_uv_project("pyproject.toml", "uv.lock")
+        worktree = self.base / "checkout"
+        git(self.base, "clone", "-q", str(self.repository), str(worktree))
+        env = {**self.fake_uv_environment(), "FAKE_UV_SLEEP": "30"}
+        started = time.monotonic()
+        with (
+            mock.patch.dict(os.environ, env),
+            mock.patch.object(WORKTREE_MODULE, "UV_SYNC_TIMEOUT_SECONDS", 1),
+        ):
+            outcome = WORKTREE_MODULE.provision_environment(worktree)
+        self.assertLess(time.monotonic() - started, 20)
+        self.assertEqual(outcome["status"], "failed")
+        self.assertEqual(outcome["reason"], "uv sync --locked --no-python-downloads did not finish within 1 seconds")
+        self.assertFalse((worktree / ".venv").exists())
 
 
 class TaskPublicationTest(unittest.TestCase):

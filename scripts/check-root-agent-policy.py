@@ -2151,6 +2151,63 @@ def check_namespaced_documentation_targets() -> None:
         fail(f"references/validation.md still references stale managed path: {stale_validation}")
 
 
+LOCKED_VALIDATION_ENVIRONMENT_MARKERS = {
+    "AGENTS.md": (
+        "Run declared root validation unchanged in the task worktree's environment",
+        "through `uv run --locked` or its activated `.venv`, never another checkout's.",
+    ),
+    "references/validation.md": (
+        "Run the declared root validation commands unchanged inside the task worktree's\nown environment, through `uv run --locked` or an activated `.venv` of that\nworktree.",
+        "Never borrow another checkout's environment",
+        "`uv sync --locked --no-python-downloads`",
+        "keeps refusing until `uv sync --locked --check` confirms that its\n`.venv` matches `uv.lock`",
+        "Plans keep declaring the unprefixed commands",
+    ),
+    "references/template-development.md": (
+        "Run `uv sync --locked` in the task worktree",
+        "Run `uv run --locked scripts/lint-project-workflow.sh`.",
+        "Run `uv run --locked tests/smoke.sh`.",
+        "Run `uv run --locked tests/copier-update.sh`",
+    ),
+    "docs/agent/SPEC_PLAN_WORKFLOW.md": (
+        "`prepare`, and likewise the explicit `create`, runs `uv sync --locked --no-python-downloads` with the worktree as its working directory",
+        "never re-syncs",
+        "an explicit `--cache-dir` naming the default user uv cache that `uv --no-config cache dir` reports without `UV_CONFIG_FILE`",
+        "exit nonzero with the retry command while it keeps the created worktree and its ownership record",
+        "`prepare` and `resume` refuse the same way to hand back a uv-locked worktree unless the read-only `uv sync --locked --check` confirms that its `.venv` matches `uv.lock`",
+        "The retry command refuses a `.venv` symbolic link before uv can write through it.",
+        "for a schema-2 member worktree, whose retirement refuses ignored files such as `.venv`",
+        "Run the declared validation commands unchanged inside that environment, through `uv run --locked` or the activated `.venv`.",
+    ),
+}
+LOCKED_VALIDATION_ENVIRONMENT_STALE = {
+    "references/template-development.md": (
+        "uv sync`.",
+        "Run `scripts/lint-project-workflow.sh`.",
+        "Run `tests/smoke.sh`.",
+    ),
+}
+
+
+def check_locked_validation_environment() -> None:
+    """Root validation runs in the task worktree's own uv-locked environment."""
+
+    markers = dict(LOCKED_VALIDATION_ENVIRONMENT_MARKERS)
+    markers["template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"] = markers[
+        "docs/agent/SPEC_PLAN_WORKFLOW.md"
+    ]
+    for relative, required in markers.items():
+        text = read(relative)
+        for marker in required:
+            if marker not in text:
+                fail(f"{relative} missing locked validation environment marker: {marker}")
+    for relative, stale in LOCKED_VALIDATION_ENVIRONMENT_STALE.items():
+        text = read(relative)
+        for marker in stale:
+            if marker in text:
+                fail(f"{relative} still names unlocked validation: {marker}")
+
+
 def require_current_plan_manifest_reference(planning: str) -> None:
     required_fields = (
         "status",
@@ -4567,6 +4624,7 @@ def main() -> int:
     check_user_communication_contract()
     check_review_turn_zero_contract()
     check_namespaced_documentation_targets()
+    check_locked_validation_environment()
     check_orchestration_policy(include_holdout=args.include_holdout)
     check_owner_resolution_boundary()
     check_plan_admission_boundary()

@@ -64,12 +64,12 @@ Before any Copier v1.4.5 before-update or after-update migration step, read the 
 Follow [../.codex/skills/release-project/references/workflow.md](../.codex/skills/release-project/references/workflow.md) for the full runbook, including version selection, downstream verification, per-effect authorization, and recovery from an interrupted release. The steps below are its outline.
 
 1. Change `copier.yml`, `template/`, references, or tests.
-2. Run `UV_CACHE_DIR=.uv-cache uv sync`.
-3. Run `UV_CACHE_DIR=.uv-cache uv run copier --version`.
-4. Run `scripts/lint-project-workflow.sh`.
-5. Run `tests/smoke.sh`.
-6. Run `tests/test-hooks.py`.
-7. Run `tests/copier-update.sh`, including the direct-update guard and recopy-based pre-v1 adoption lanes.
+2. Run `uv sync --locked` in the task worktree, unless `scripts/manage-plan-worktrees.py prepare` already reported its `.venv` as synced.
+3. Run `uv run --locked copier --version`.
+4. Run `uv run --locked scripts/lint-project-workflow.sh`.
+5. Run `uv run --locked tests/smoke.sh`.
+6. Run `uv run --locked tests/test-hooks.py`.
+7. Run `uv run --locked tests/copier-update.sh`, including the direct-update guard and recopy-based pre-v1 adoption lanes.
 8. Generate at least one sample project with Copier when the CLI is available.
 9. Commit the change.
 10. Tag stable template versions for downstream `copier update`.
