@@ -1,6 +1,6 @@
 # Treat an owner quotation recorded in the plan manifest as the standing continuation authorization at plan start
 
-status: in_progress
+status: checked
 primary_invariant: A plan's own standing_continuation_authorization line, holding the owner's verbatim words, is the only new source of a standing authorization; it is bound to the exact committed plan before the first formal review, and a plan without it, the four-review maximum and the fresh owner decision after the fourth review are unchanged.
 task_types:
   - planning_docs
@@ -104,13 +104,23 @@ checked_summary_ja: 計画ファイルに記録したオーナーの承認の言
 
 ## Tasks
 
-- [ ] Before product edits, prepare the parent-direct execution ledger with prepare-parent-direct, register the standing authorization with the owner's words quoted in Validation Notes, record the review-route check, and record the unchanged baseline results of the focused suites.
-- [ ] Implement plan-sourced registration and the first-review gate in both plan-execution-state.py copies, with cases for the field, its refusals, derivation for epochs 1 to 3 and the unchanged path without it.
-- [ ] Add the optional field to both authoring profiles and the rebind-protected set in both restructure-plan.py copies, with their cases.
-- [ ] State the rule in AGENTS.md, the generated AGENTS body, both Review-Finding Budgets sections, both orchestration copies, both orchestrator skills, both checkers and CHANGELOG.md, and add the field to backlog plans 422 and 423.
-- [ ] Record a passing adversarial preflight, obtain independent review through a fresh read-only Codex reviewer whose first prompt carries the ReviewPacket marker, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
+- [x] Before product edits, prepare the parent-direct execution ledger with prepare-parent-direct, register the standing authorization with the owner's words quoted in Validation Notes, record the review-route check, and record the unchanged baseline results of the focused suites.
+- [x] Implement plan-sourced registration and the first-review gate in both plan-execution-state.py copies, with cases for the field, its refusals, derivation for epochs 1 to 3 and the unchanged path without it.
+- [x] Add the optional field to both authoring profiles and the rebind-protected set in both restructure-plan.py copies, with their cases.
+- [x] State the rule in AGENTS.md, the generated AGENTS body, both Review-Finding Budgets sections, both orchestration copies, both orchestrator skills, both checkers and CHANGELOG.md, and add the field to backlog plans 422 and 423.
+- [x] Record a passing adversarial preflight, obtain independent review through a fresh read-only Codex reviewer whose first prompt carries the ReviewPacket marker, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
 
 ## Validation Notes
 
 - Owner statement on 2026-09-27, after plan 421 asked twice for continuation approval: 「420 プランはすでに実装されているため、 こちらに 4回レビューまで承認を求めなくともよいようにしていたはずだが」. The owner then chose option 2, recording the owner's approval in the plan file, with 「2 の計画で作成する。」.
 - Run this plan before plan 422, so plans 422 and 423 start with their recorded approval.
+- Parent-direct implementation was prepared against source `208a6c8852dbf2fc85f9feca89f2d59ec77057a5`. Before any review, the existing explicit `standing-authorization` command registered the owner statement quoted above (the first quotation) as this plan's standing authorization. Each epoch recorded its own runtime-proven read-only route probe and exact-target adversarial preflight. No writable helper was used.
+- Baseline: the execution-state (277), restructure (216), root policy and Copier template checks passed before product edits. `python3 tests/test-validation-tools.py` failed 15 Ruff-dependent lint cases under the plain system Python and passed (425) with the main checkout's pinned `.venv/bin` first on `PATH`; later runs used the same split (plan 422).
+- Standing mode continued each eligible review-budget stop without a new owner message. Formal review 1 recorded High and Medium and stopped epoch 0: the ledger admitted placeholders such as `pending`, and trusted a field present only in uncommitted plan bytes. Derived schema-1 authorization, verified, `continue` opened epoch 1.
+- Formal review 2 recorded one Medium and stopped epoch 1 with two findings: an uncommitted deletion of a committed field bypassed the gate, and a field-shaped body line was trusted although restructuring reads only the leading manifest. Derived schema-2 authorization, verified, `continue-final` opened epoch 2.
+- Formal review 3 recorded one Medium and stopped epoch 2: a noncanonical key such as `standing_continuation_authorization : words` was ignored by the ledger and the root checker but read as the field by planlib and restructuring. Derived schema-3 authorization, verified, `continue-fourth-review` opened epoch 3.
+- Formal review 4, in a fresh read-only Codex session, reported `REVIEW-VERDICT: none`. No owner resolution was needed; the cumulative four-review maximum was reached, not exceeded.
+- The ledger, the root checker and plan authoring now share the admission placeholder vocabulary, also refusing dotted spellings such as `t.b.d.`. The field is read only from the source-head blob that the ledger digest binds. It is recognized as planlib and restructuring recognize keys, and only in its canonical spelling in the leading manifest. A throwaway harness checked that the four parsers agree across 3,150 spelling, placement and value variants.
+- Regression proof: the new execution-state, authoring and restructure cases failed against the source baseline and pass now. The review-1 and review-2 regression cases also failed against the first implementation, and the review-3 spelling cases failed against the epoch-2 implementation. A mutated copy of the repository made both checkers fail: a duplicated field in plan 422 and a removed rule marker in the generated AGENTS body.
+- Focused validation passed: `python3 tests/test-plan-execution-state.py` (282 tests), `python3 tests/test-validation-tools.py` (427 tests), `python3 tests/test-plan-restructure.py` (217 tests), `python3 scripts/check-root-agent-policy.py` and `python3 scripts/check-copier-template.py`. Authoritative `scripts/lint-project-workflow.sh` and `tests/smoke.sh` each ran once after the clearing review and passed. The completion and archive execution gates passed before lifecycle edits.
+- Accepted implementation commit: `175ee65`. External ledgers, standing and derived authorizations, receipts, review evidence and validation output are retained under `~/.local/state/project-agent-workflow/plan-424-20260927/`. Link changes: none.
