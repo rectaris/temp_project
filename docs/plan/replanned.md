@@ -80,3 +80,4 @@ id	path	contract
 394	docs/plan/replanned/2026/09/16-31/394-bind-custom-worker-dispatch-provenance.md	docs/plan/replanned/contracts/394-target-writable-worker-backends.json
 395	docs/plan/replanned/2026/09/16-31/395-run-opencode-go-candidate-worker.md	docs/plan/replanned/contracts/394-target-writable-worker-backends.json
 396	docs/plan/replanned/2026/09/16-31/396-integrate-opencode-go-candidate-route.md	docs/plan/replanned/contracts/394-target-writable-worker-backends.json
+415	docs/plan/replanned/2026/09/16-31/415-compare-named-run-configurations-by-changed-dimensions.md	docs/plan/replanned/contracts/415-compare-named-run-configurations-by-changed-dimensions.json

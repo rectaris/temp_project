@@ -1,7 +1,6 @@
 # Compare named run configurations by the exact dimensions that differ, keeping schema-1 comparisons unchanged
 
-status: replan_required
-primary_invariant: A schema-2 comparison attributes an effect to one dimension only when exactly that declared dimension differs between a pair, reports identical configurations as replication with the recommendation withheld, and every schema-1 protocol and observation is judged exactly as before.
+status: replanned
 task_types:
   - harness_evaluation
   - template_workflow
@@ -71,10 +70,18 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:f887b30541a71622b3803789811e7b871eff4501a202c9a8e47deed650ae1bd3","stage":"focused","witness":"python3 tests/test-harness-comparison.py"}
   - {"acceptance_sha256":"sha256:a79b52e451801b3b88561e957de4c21a56ee0affc114fba863fccbbd7248798b","stage":"focused","witness":"python3 tests/test-harness-comparison.py"}
   - {"acceptance_sha256":"sha256:24d60fbb31f397e30d1b9de6d509aebbe69207d3cd4e56352b8174f9cb57d09e","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/415-compare-named-run-configurations-by-changed-dimensions.md
+replan_contract: docs/plan/replanned/contracts/415-compare-named-run-configurations-by-changed-dimensions.json
 integration_gates:
-  - docs/plan/checked/2026/09/16-31/410-resolve-codex-runner-through-capability-registry.md
-replan_reason_codes:
-  - scope_drift
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/386-compare-named-run-configurations-with-pinned-policy-digest.md
+inherited_acceptance_digests:
+  - sha256:f887b30541a71622b3803789811e7b871eff4501a202c9a8e47deed650ae1bd3
+  - sha256:a79b52e451801b3b88561e957de4c21a56ee0affc114fba863fccbbd7248798b
+  - sha256:24d60fbb31f397e30d1b9de6d509aebbe69207d3cd4e56352b8174f9cb57d09e
 checked_summary_ja: 名前付きの実行構成を、違う次元の集合で分類して比べられるようにし、schema 1 の比較はそのまま保つ。
 
 ## Decisions

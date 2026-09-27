@@ -1,4 +1,4 @@
 # Active Plan
 
 id	path	status
-415	docs/plan/active/415-compare-named-run-configurations-by-changed-dimensions.md	replan_required
+386	docs/plan/active/386-compare-named-run-configurations-with-pinned-policy-digest.md	in_progress
