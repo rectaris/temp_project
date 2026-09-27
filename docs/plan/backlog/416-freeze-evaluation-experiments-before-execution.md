@@ -68,7 +68,7 @@ context_files:
   - scripts/compare-harness-runs.py
   - docs/agent/capability-registry.json
   - docs/agent/SPEC_HARNESS_PROFILES.md
-  - docs/plan/backlog/415-compare-named-run-configurations-by-changed-dimensions.md
+  - docs/plan/active/415-compare-named-run-configurations-by-changed-dimensions.md
 required_specs:
   - docs/agent/SPEC_HARNESS_EVALUATION.md
   - docs/agent/SPEC_PLAN_WORKFLOW.md

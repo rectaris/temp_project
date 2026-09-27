@@ -48,7 +48,7 @@ context_files:
   - tests/AGENTS.md
   - scripts/run-sandboxed-plan-worker.py
   - scripts/compare-harness-runs.py
-  - docs/plan/backlog/415-compare-named-run-configurations-by-changed-dimensions.md
+  - docs/plan/active/415-compare-named-run-configurations-by-changed-dimensions.md
   - docs/plan/backlog/418-execute-evaluation-runs-in-isolated-codex-sandboxes.md
 required_specs:
   - docs/agent/SPEC_HARNESS_EVALUATION.md
