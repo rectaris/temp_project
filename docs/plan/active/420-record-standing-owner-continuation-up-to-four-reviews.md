@@ -1,6 +1,6 @@
 # Let one owner authorization given at plan start cover each same-plan continuation up to the fourth review
 
-status: backlog
+status: in_progress
 primary_invariant: A same-plan continuation proceeds without a new owner message only when the owner recorded a standing authorization for that exact plan and execution genesis before its first formal review; every continuation still writes its own bound authorization record, the cumulative four-review limit is unchanged, and the stop after the fourth review always needs a fresh owner decision.
 task_types:
   - planning_docs
