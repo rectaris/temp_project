@@ -1,6 +1,6 @@
 # Compare named run configurations by the exact dimensions that differ, with the harness policy digest pinned
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: A schema-2 comparison attributes an effect to one dimension only when exactly that declared dimension differs between a pair, reports identical configurations as replication with the recommendation withheld, and every schema-1 protocol and observation is judged exactly as before.
 replan_sources:
@@ -114,15 +114,23 @@ checked_summary_ja: 名前付きの実行構成を、違う次元の集合で分
 
 ## Tasks
 
-- [ ] Before product edits, prepare a fresh parent-direct execution ledger with a new reviewer registry and continuation registry, record its review-route check, and confirm the promoted candidate bytes match the recorded promoted patch digest.
-- [ ] Refresh the harness-evaluation-policy content_digest in both harness-instructions.json catalogs.
-- [ ] Split the Japanese CHANGELOG.md entry into one sentence per line.
-- [ ] Obtain independent review through a fresh read-only reviewer whose first prompt carries the ReviewPacket marker, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
+- [x] Before product edits, prepare a fresh parent-direct execution ledger with a new reviewer registry and continuation registry, record its review-route check, and confirm the promoted candidate bytes match the recorded promoted patch digest.
+- [x] Refresh the harness-evaluation-policy content_digest in both harness-instructions.json catalogs.
+- [x] Split the Japanese CHANGELOG.md entry into one sentence per line.
+- [x] Obtain independent review through a fresh read-only reviewer whose first prompt carries the ReviewPacket marker, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
 
 ## Validation Notes
 
 - This plan reconstructs plan 415 on the owner's instruction of 2026-09-27, 「正式な手順で進める」. The owner started plan 415 with 「@docs/plan/backlog/415-compare-named-run-configurations-by-changed-dimensions.md について実装作業をせよ。」 and authorized one continuation with 「続行を承認する」 after its first review. Plan 415's authoritative validation failed in two places. Backlog plans 416 and 417 kept stale context_files references after the plan 415 activation, which the plan 415 stop commit corrected. Both harness-instructions.json catalogs pin the old SPEC_HARNESS_EVALUATION.md digest, and neither catalog was in plan 415's write scope.
 - Plan 415 used both formal reviews of epoch 0 and epoch 1. Review 1 found one Medium: a schema-2 declared model counted as confirmed by any observed identity. The promoted candidate fixes it. Review 2 left one Low: the CHANGELOG.md entry puts two Japanese sentences on some lines.
 - The reconstruction added the python3 tests/test-harness-profiles.py allowlist entry to the promoted scripts/plan_validation_commands.py, because the transaction validates every declared focused command against the allowlist. That line has had no independent review.
-- The promoted candidate is advisory until this plan's own review and validation pass. Implementation has not started under this plan; its focused and authoritative commands are required future witnesses.
+- The promoted candidate was advisory until this plan's own review and validation passed; no plan 415 review, preflight or validation evidence was reused.
 - The owner instruction of 2026-09-26, 「提案の方針で進める。」, still governs the Issue #15 Phase 1 split that plan 415 belonged to.
+- Parent-direct implementation was prepared against source `581ab20e5777d1c4a51c6a03bb29ddf113b9d98c` with `prepare-parent-direct`, with a new reviewer registry and continuation registry. A runtime-proven read-only route probe was recorded before product edits, and the promoted candidate matched patch sha256:ca40df0558429f9df6cf18e9072cb6bffa35f133ebed6524b7832a31c533c662. No writable helper was used; fresh read-only Codex sessions served as the route probes, reviewers and the plan 415 failure diagnosis.
+- Baseline at plan 415's activation, run serially: `python3 tests/test-harness-comparison.py` passed 56 tests, `--generated` passed 8, and `python3 scripts/check-copier-template.py` passed. With the promoted candidate, `python3 tests/test-harness-profiles.py` failed one case on the harness-evaluation-policy digest.
+- Schema-1 parity: every input of the unchanged schema-1 suite (49 runs) produced byte-identical stdout, stderr and exit status from the baseline snapshot and the new command. A throwaway mutation of every protocol and first-observation field over ten replacement values gave 1,379 identical results of 1,390. All 11 differences were `schema_version` mutations: nine changed only the rejection message, and `true`, which the baseline accepted, is now refused as this plan requires.
+- Regression proof: 21 of the first 22 new tests fail against the baseline implementation; the exact-key test also passes there, because the baseline rejects every schema-2 input by its shape. The later model-confirmation test fails against the plan 415 epoch-0 candidate that review 1 found defective. Throwaway adversarial cases passed 12 of 12 in the exact-target preflight, including forged cell labels, dimension type confusion, key-order-independent digests, hidden model drift in a replication, a baseline swapped between cases, look-alike schema versions, the byte-identical schema-1 report and catalog-pin drift in a generated layout.
+- Formal review 1 of this plan, in a fresh read-only Codex session whose first prompt carried the ReviewPacket marker, reported `REVIEW-VERDICT: none` after an exact-target adversarial preflight. This run used one review.
+- Focused validation passed once through `uv run --locked`: `python3 tests/test-harness-comparison.py` (79 tests), `python3 tests/test-harness-comparison.py --generated` (9 tests), `python3 scripts/check-copier-template.py` and `python3 tests/test-harness-profiles.py` (18 tests). Authoritative `scripts/lint-project-workflow.sh` and `tests/smoke.sh` each ran once through `uv run --locked` after the clearing review and passed. The completion and archive execution gates passed before the implementation commit.
+- Known limit, outside this plan: a schema-1 declared model still counts as confirmed by any observed identity, as before; plan 415 required schema-1 judgments to stay unchanged.
+- Accepted implementation commit: `50e0dc0`. The plan 415 and plan 386 ledgers, the authorizations, receipts, diagnosis, review evidence and validation output are retained under `~/.local/state/project-agent-workflow/plan-415-20260927/`, `~/.local/state/project-agent-workflow/plan-415-reconstruction/` and `~/.local/state/project-agent-workflow/plan-386-20260927/`. Link changes: none.

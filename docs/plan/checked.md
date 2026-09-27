@@ -301,3 +301,4 @@ id	path
 424	docs/plan/checked/2026/09/16-31/424-take-standing-authorization-from-the-plan-manifest.md
 422	docs/plan/checked/2026/09/16-31/422-provision-task-worktrees-with-the-locked-uv-environment.md
 423	docs/plan/checked/2026/09/16-31/423-run-sandboxed-python-helpers-from-a-reachable-interpreter.md
+386	docs/plan/checked/2026/09/16-31/386-compare-named-run-configurations-with-pinned-policy-digest.md
