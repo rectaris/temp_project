@@ -28,7 +28,7 @@ Ruffによる検査を入れた[353](../checked/2026/09/16-31/353-enforce-bounde
 
 ## 開発環境と進め方の規則の変更
 
-オーナーの指示で、2026-09-26 に見つかった開発環境と進め方の問題を、規則として定める5件を作った。
+オーナーの指示で、2026-09-26 に見つかった開発環境と進め方の問題を、規則として定める5件を作った。2026-09-27 に1件を加えた。
 Issue #15の4件より先に、次の順に一件ずつ、それぞれ新しい会話セッションで実装する。
 
 1. [419：プランの行き先ごとに一つの番号予約](419-keep-one-plan-id-reservation-per-authoring-target.md)
@@ -37,9 +37,11 @@ Issue #15の4件より先に、次の順に一件ずつ、それぞれ新しい�
    オーナーが開始時に承認すれば、4回目のレビューまでは続行の承認を求めない。4回目の後の判断は、必ずオーナーが行う。
 3. [421：提供が終了したSparkからTerraへの置き換え](421-route-writable-work-to-terra-after-spark-retirement.md)
    OpenAIは[2026-09-14にgpt-5.3-codex-sparkの提供を終了した](https://learn.chatgpt.com/docs/changelog#codex-2026-09-14-codex-spark-deprecation)。書き込みの作業はgpt-5.6-terraのmediumに統一し、生成先のプロジェクトでも更新時に置き換える。
-4. [422：タスクのworktreeへのuv環境の用意](422-provision-task-worktrees-with-the-locked-uv-environment.md)
+4. [424：計画ファイルに記録したオーナーの承認での続行](424-take-standing-authorization-from-the-plan-manifest.md)
+   オーナーの承認の言葉を計画ファイルの`standing_continuation_authorization`に記録しておけば、レビューで止まるたびに承認を求めずに、4回目のレビューまで続行する。421で開始時の記録を作らず承認を2回求めたため、2026-09-27に追加した。422と423にもこの承認を記録するので、422より先に実装する。
+5. [422：タスクのworktreeへのuv環境の用意](422-provision-task-worktrees-with-the-locked-uv-environment.md)
    新しいworktreeを作るときに`uv sync --locked`で`.venv`を作り、ルートの検証をその環境で実行する。
-5. [423：サンドボックスから見えるPythonでの補助処理](423-run-sandboxed-python-helpers-from-a-reachable-interpreter.md)
+6. [423：サンドボックスから見えるPythonでの補助処理](423-run-sandboxed-python-helpers-from-a-reachable-interpreter.md)
    ランナーをuvの仮想環境で動かしても、サンドボックスの中のPythonが動くようにする。422の完了後に始める。
 
 423が完了するまでは、`tests/test-sandboxed-plan-worker.py`をシステムの`python3`で実行する。
