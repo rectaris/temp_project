@@ -1,6 +1,6 @@
 name = "fast_scoped_worker"
 description = "Fast implementation worker for bounded, reversible code changes with predetermined validation."
-model = "gpt-5.3-codex-spark"
+model = "gpt-5.6-terra"
 model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 

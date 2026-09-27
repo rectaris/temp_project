@@ -49,11 +49,10 @@ WORKER_COMPLETION_EXIT_STATUS_MIN = -255
 WORKER_COMPLETION_EXIT_STATUS_MAX = 255
 DEPENDENCY_SNAPSHOT_SCHEMA_VERSION = 1
 DEPENDENCY_SNAPSHOT_MAX_BYTES = 16_384
-DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"
+DEFAULT_CODEX_MODEL = "gpt-5.6-terra"
 DEFAULT_CODEX_REASONING = "medium"
 DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"
 DEFAULT_FALLBACK_CODEX_REASONING = "max"
-TERRA_CODEX_MODEL = "gpt-5.6-terra"
 IMPLEMENTATION_CLASSIFICATIONS = frozenset({"low", "ordinary", "high"})
 WRITABLE_SOL_MODEL = "gpt-5.6-sol"
 AVAILABILITY_STATE_SCHEMA_VERSION = 1
@@ -2517,7 +2516,7 @@ def implementation_classification(values: dict[str, str | list[str]], key: str) 
 
 
 def select_plan_writable_profile(values: dict[str, str | list[str]]) -> tuple[str, str]:
-    """Select a writable model from separate risk and ambiguity declarations."""
+    """Refuse a high risk or ambiguity declaration and route every eligible plan to Terra medium."""
     risk = implementation_classification(values, "implementation_risk")
     ambiguity = implementation_classification(values, "implementation_ambiguity")
     if "high" in {risk, ambiguity}:
@@ -2525,9 +2524,7 @@ def select_plan_writable_profile(values: dict[str, str | list[str]]) -> tuple[st
             "writable sequential delegation is refused when implementation_risk or "
             "implementation_ambiguity is high"
         )
-    if risk == ambiguity == "low":
-        return DEFAULT_CODEX_MODEL, DEFAULT_CODEX_REASONING
-    return TERRA_CODEX_MODEL, "medium"
+    return DEFAULT_CODEX_MODEL, DEFAULT_CODEX_REASONING
 
 
 def require_writable_model(model: str | None, label: str) -> str:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import stat
@@ -16,11 +17,26 @@ PROFILES = {
     "change_reviewer": ("gpt-5.6-sol", "high"),
     "docs_researcher": ("gpt-5.6-luna", "medium"),
     "evidence_synthesizer": ("gpt-5.6-luna", "xhigh"),
-    "fast_scoped_worker": ("gpt-5.3-codex-spark", "medium"),
+    "fast_scoped_worker": ("gpt-5.6-terra", "medium"),
     "repo_explorer": ("gpt-5.6-luna", "low"),
     "scoped_worker": ("gpt-5.6-terra", "medium"),
-    "sequential_plan_worker": ("gpt-5.3-codex-spark", "medium"),
+    "sequential_plan_worker": ("gpt-5.6-terra", "medium"),
 }
+
+# A retired model is no longer a project choice: Codex no longer serves it, so a
+# declared value is replaced in place by its successor. A declared reasoning
+# effort stays as declared, and medium is supplied only when it is absent.
+RETIRED_MODEL = "gpt-5.3-codex-spark"
+RETIRED_MODEL_REPLACEMENT = ("gpt-5.6-terra", "medium")
+RETIRED_MODEL_LINE = re.compile(
+    r"^(?P<prefix>[ \t]*(?:model|\"model\"|'model')[ \t]*=[ \t]*)"
+    r"(?P<quote>[\"'])gpt-5\.3-codex-spark(?P=quote)"
+    r"(?P<suffix>[ \t]*(?:#.*)?)$"
+)
+# The exact v1.2.1 workspace-write sequential worker. Its v1.4.2 migration
+# replaces the whole profile with the read-only contract only while these bytes
+# are intact, so this task leaves that input for the migration.
+LEGACY_SEQUENTIAL_WORKER_SHA256 = "744ed4f634e13ec1de27076dfa9f12411a8b01ff56ba27cfbc5151086fbe1ccb"
 
 PROFILE_FIELDS = ("model", "model_reasoning_effort", "name", "description")
 FIELD_PATTERNS = {
@@ -115,8 +131,12 @@ def render_profile(text: str, model: str, effort: str) -> str:
     lines = text.splitlines()
     raw_lines = text.splitlines(keepends=True)
     assignments = root_assignments(lines)
+    retired = parsed.get("model") == RETIRED_MODEL
+    if retired:
+        effort = RETIRED_MODEL_REPLACEMENT[1]
     defaults = {"model": model, "model_reasoning_effort": effort}
     missing: list[tuple[str, str]] = []
+    replaced: dict[str, str] = {}
     for field, value in defaults.items():
         matches = assignments[field]
         if len(matches) > 1:
@@ -124,14 +144,33 @@ def render_profile(text: str, model: str, effort: str) -> str:
         if matches:
             # The project owns a field it already declares. Filling only what is
             # absent keeps an update non-destructive; an existing value that
-            # happens to equal an older seed is still the project's value.
+            # happens to equal an older seed is still the project's value. The
+            # retired model below is the only declared value this task replaces.
             if not isinstance(parsed.get(field), str):
                 raise ProfileError(f"agent TOML must declare {field} as a string")
         else:
             missing.append((field, value))
 
-    if not missing:
+    if retired:
+        if len(assignments["model"]) != 1:
+            raise ProfileError("agent TOML declares the retired model outside a root model line")
+        index = assignments["model"][0][0]
+        match = RETIRED_MODEL_LINE.fullmatch(lines[index])
+        if match is None:
+            raise ProfileError("agent TOML declares the retired model in a form that cannot be replaced in place")
+        replacement = RETIRED_MODEL_REPLACEMENT[0]
+        quote = match.group("quote")
+        raw_lines[index] = (
+            f'{match.group("prefix")}{quote}{replacement}{quote}{match.group("suffix")}'
+            f"{raw_lines[index][len(lines[index]):]}"
+        )
+        replaced["model"] = replacement
+
+    if not missing and not replaced:
         return text
+
+    if not missing:
+        return verified_render(parsed, "".join(raw_lines), defaults, {}, replaced)
 
     description_anchor = next((index for index, _ in assignments["description"]), None)
     name_anchor = next((index for index, _ in assignments["name"]), None)
@@ -152,17 +191,27 @@ def render_profile(text: str, model: str, effort: str) -> str:
     for field, value in reversed(missing):
         raw_lines.insert(insert_after + 1, f'{insertion_indent}{field} = "{value}"{terminator}')
 
-    rendered = "".join(raw_lines)
+    return verified_render(parsed, "".join(raw_lines), defaults, dict(missing), replaced)
+
+
+def verified_render(
+    parsed: dict[str, object],
+    rendered: str,
+    defaults: dict[str, str],
+    inserted: dict[str, str],
+    replaced: dict[str, str],
+) -> str:
     try:
         normalized = tomllib.loads(rendered)
     except tomllib.TOMLDecodeError as exc:
         raise ProfileError(f"agent TOML did not remain valid TOML after normalization: {exc}") from exc
-    inserted = dict(missing)
     for field in defaults:
-        previous = parsed.get(field)
-        wanted = inserted[field] if field in inserted else previous
+        wanted = inserted.get(field, replaced.get(field, parsed.get(field)))
         if normalized.get(field) != wanted:
             raise ProfileError(f"agent TOML did not preserve {field}")
+    remainder = {key: value for key, value in normalized.items() if key not in defaults}
+    if remainder != {key: value for key, value in parsed.items() if key not in defaults}:
+        raise ProfileError("agent TOML changed a field outside the fixed model fields")
     return rendered
 
 
@@ -179,7 +228,9 @@ def write_atomic(path: Path, text: str) -> None:
 
 
 def normalize_destination(destination: Path, *, check: bool = False) -> list[Path]:
-    changed: list[Path] = []
+    # Every profile is rendered before any is written, so a refused profile
+    # leaves the destination exactly as it was.
+    pending: list[tuple[Path, Path, str]] = []
     for name, (model, effort) in PROFILES.items():
         relative = Path(".codex/agents") / f"{name}.toml"
         path = destination / relative
@@ -196,16 +247,22 @@ def normalize_destination(destination: Path, *, check: bool = False) -> list[Pat
             raise ProfileError(f"agent profile resolves outside the destination: {relative}")
         with path.open("r", encoding="utf-8", newline="") as handle:
             original = handle.read()
+        if (
+            name == "sequential_plan_worker"
+            and hashlib.sha256(original.encode("utf-8")).hexdigest() == LEGACY_SEQUENTIAL_WORKER_SHA256
+        ):
+            continue
         try:
             rendered = render_profile(original, model, effort)
         except ProfileError as exc:
             raise ProfileError(f"{relative}: {exc}") from exc
         if rendered == original:
             continue
-        changed.append(relative)
-        if not check:
+        pending.append((relative, path, rendered))
+    if not check:
+        for _relative, path, rendered in pending:
             write_atomic(path, rendered)
-    return changed
+    return [relative for relative, _path, _rendered in pending]
 
 
 def main() -> int:

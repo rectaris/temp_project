@@ -39,6 +39,10 @@ field_overrides:
     template_default_when_absent:
       - model
       - model_reasoning_effort
+    retired_model_replacements:
+      - retired: gpt-5.3-codex-spark
+        replacement: gpt-5.6-terra
+        reasoning_default_when_absent: medium
     project_owned_remainder: true
 
 metadata:

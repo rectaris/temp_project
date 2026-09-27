@@ -1513,11 +1513,11 @@ grep -q '^model = "gpt-5.6-luna"$' "$tmp/typescript/.codex/agents/repo_explorer.
 grep -q '^model_reasoning_effort = "low"$' "$tmp/typescript/.codex/agents/repo_explorer.toml"
 grep -q '^model = "gpt-5.6-terra"$' "$tmp/typescript/.codex/agents/scoped_worker.toml"
 grep -q '^model_reasoning_effort = "medium"$' "$tmp/typescript/.codex/agents/scoped_worker.toml"
-grep -q '^model = "gpt-5.3-codex-spark"$' "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
+grep -q '^model = "gpt-5.6-terra"$' "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
 grep -q '^model_reasoning_effort = "medium"$' "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
 grep -q 'Require an explicit write scope and predetermined validation' "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
 grep -q 'Do not commit, tag, push, release' "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
-grep -q '^model = "gpt-5.3-codex-spark"$' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
+grep -q '^model = "gpt-5.6-terra"$' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q '^model_reasoning_effort = "medium"$' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q '^sandbox_mode = "read-only"$' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q 'Do not process the next active plan' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
@@ -1526,8 +1526,12 @@ grep -q "Do not edit the assigned plan's status" "$tmp/typescript/.codex/agents/
 grep -q 'Do not commit changes' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run <plan>' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 python3 "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py" --help >/dev/null
-grep -q 'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-grep -q 'TERRA_CODEX_MODEL = "gpt-5.6-terra"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q '^DEFAULT_CODEX_MODEL = "gpt-5.6-terra"$' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+if grep -qi 'spark' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py" \
+  "$tmp/typescript/.codex/agents/fast_scoped_worker.toml" "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"; then
+  echo "generated writable routing or helper profile still selects the retired gpt-5.3-codex-spark" >&2
+  exit 1
+fi
 grep -q 'def select_plan_writable_profile' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q 'def open_availability_state' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q -- '--availability-state' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
@@ -1658,7 +1662,8 @@ grep -q 'sequential_plan_worker.*exactly one assigned active plan' "$tmp/typescr
 grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'primary_invariant' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'exact file paths' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
-grep -q 'gpt-5.3-codex-spark.*medium reasoning' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'gpt-5.6-terra.*medium reasoning for every eligible input' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'gpt-5.3-codex-spark` is retired and is never selected' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'gpt-5.6-luna.*max reasoning' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'usage limit, rate limit, unavailable model, or denied model access' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'fast_scoped_worker.*predetermined validation' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"

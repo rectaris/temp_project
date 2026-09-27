@@ -1345,5 +1345,229 @@ developer_instructions = """Preserve this instruction."""
             VALIDATOR.validate(repository)
 
 
+SPARK_FAST_WORKER = '''name = "fast_scoped_worker"
+description = "Project fast worker."
+model = "gpt-5.3-codex-spark"
+model_reasoning_effort = "high"
+sandbox_mode = "workspace-write"
+developer_instructions = """Preserve this instruction."""
+'''
+
+
+class RetiredAgentModelTransitionTest(unittest.TestCase):
+    make_repository = CopierOwnedContentValidationTest.make_repository
+
+    def commit_profile(self, repository: Path, name: str, content: str) -> Path:
+        agent = repository / ".codex/agents" / f"{name}.toml"
+        agent.write_text(content, encoding="utf-8", newline="")
+        subprocess.run(["git", "add", str(agent.relative_to(repository))], cwd=repository, check=True)
+        subprocess.run(["git", "commit", "-qm", f"declare {name}"], cwd=repository, check=True)
+        return agent
+
+    def test_updater_and_validator_share_the_retired_model_rule(self) -> None:
+        self.assertEqual(PROFILE_UPDATER.RETIRED_MODEL, "gpt-5.3-codex-spark")
+        self.assertEqual(PROFILE_UPDATER.RETIRED_MODEL_REPLACEMENT, ("gpt-5.6-terra", "medium"))
+        self.assertEqual(VALIDATOR.RETIRED_AGENT_MODEL, PROFILE_UPDATER.RETIRED_MODEL)
+        self.assertEqual(
+            VALIDATOR.RETIRED_AGENT_MODEL_REPLACEMENT, PROFILE_UPDATER.RETIRED_MODEL_REPLACEMENT
+        )
+        self.assertNotIn(
+            "gpt-5.3-codex-spark", {model for model, _ in PROFILE_UPDATER.PROFILES.values()}
+        )
+
+    def test_profile_task_replaces_only_the_retired_model_in_place(self) -> None:
+        seeded = PROFILE_UPDATER.PROFILES["fast_scoped_worker"]
+        self.assertEqual(
+            PROFILE_UPDATER.render_profile(SPARK_FAST_WORKER, *seeded),
+            SPARK_FAST_WORKER.replace("gpt-5.3-codex-spark", "gpt-5.6-terra"),
+        )
+        quoted = (
+            'name = "fast_scoped_worker"\r\n'
+            "  \"model\" = 'gpt-5.3-codex-spark'  # project comment\r\n"
+            'model_reasoning_effort = "low"\r\n'
+        )
+        self.assertEqual(
+            PROFILE_UPDATER.render_profile(quoted, *seeded),
+            quoted.replace("'gpt-5.3-codex-spark'", "'gpt-5.6-terra'"),
+        )
+        # The absent effort beside the retired model becomes Terra's medium,
+        # not this profile's own seeded effort.
+        without_effort = 'name = "repo_explorer"\ndescription = "Reader."\nmodel = "gpt-5.3-codex-spark"\n'
+        self.assertEqual(
+            PROFILE_UPDATER.render_profile(
+                without_effort, *PROFILE_UPDATER.PROFILES["repo_explorer"]
+            ),
+            'name = "repo_explorer"\ndescription = "Reader."\n'
+            'model_reasoning_effort = "medium"\nmodel = "gpt-5.6-terra"\n',
+        )
+        for declared in ("gpt-5.3-codex-spark-preview", "GPT-5.3-Codex-Spark", "gpt-5.3-codex"):
+            with self.subTest(declared=declared):
+                kept = SPARK_FAST_WORKER.replace("gpt-5.3-codex-spark", declared)
+                self.assertEqual(PROFILE_UPDATER.render_profile(kept, *seeded), kept)
+
+    def test_profile_task_refuses_a_retired_model_it_cannot_replace_in_place(self) -> None:
+        escaped = SPARK_FAST_WORKER.replace("gpt-5.3-codex-spark", "gpt-5.3-codex-spar\\u006b")
+        with self.assertRaisesRegex(PROFILE_UPDATER.ProfileError, "cannot be replaced in place"):
+            PROFILE_UPDATER.render_profile(escaped, *PROFILE_UPDATER.PROFILES["fast_scoped_worker"])
+
+    def test_profile_task_leaves_the_exact_legacy_worker_for_its_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp)
+            agents = destination / ".codex/agents"
+            agents.mkdir(parents=True)
+            for name in PROFILE_UPDATER.PROFILES:
+                (agents / f"{name}.toml").write_bytes(
+                    (ROOT / "template/.codex/agents" / f"{name}.toml").read_bytes()
+                )
+            (agents / "sequential_plan_worker.toml").write_text(LEGACY_SEQUENTIAL_WORKER, encoding="utf-8")
+            (agents / "fast_scoped_worker.toml").write_text(SPARK_FAST_WORKER, encoding="utf-8")
+
+            changed = PROFILE_UPDATER.normalize_destination(destination)
+            self.assertEqual(changed, [Path(".codex/agents/fast_scoped_worker.toml")])
+            self.assertEqual(
+                (agents / "sequential_plan_worker.toml").read_text(encoding="utf-8"),
+                LEGACY_SEQUENTIAL_WORKER,
+            )
+            migrated = subprocess.run(
+                ["python3", str(WORKER_MIGRATOR), "--destination", str(destination)],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(migrated.returncode, 0, migrated.stderr)
+            self.assertEqual(
+                (agents / "sequential_plan_worker.toml").read_bytes(),
+                (ROOT / "template/.codex/agents/sequential_plan_worker.toml").read_bytes(),
+            )
+            self.assertEqual(PROFILE_UPDATER.normalize_destination(destination, check=True), [])
+
+    def test_validator_admits_only_the_retired_model_replacement(self) -> None:
+        temporary, repository = self.make_repository()
+        self.addCleanup(temporary.cleanup)
+        agent = self.commit_profile(repository, "fast_scoped_worker", SPARK_FAST_WORKER)
+        replaced = SPARK_FAST_WORKER.replace("gpt-5.3-codex-spark", "gpt-5.6-terra")
+        agent.write_text(replaced, encoding="utf-8")
+        VALIDATOR.validate(repository)
+        for label, content, message in (
+            ("other successor", SPARK_FAST_WORKER.replace("gpt-5.3-codex-spark", "gpt-5.6-luna"), "project-owned agent profile field"),
+            ("reasoning rewritten", replaced.replace('"high"', '"medium"'), "project-owned agent profile field"),
+            ("reasoning removed", replaced.replace('model_reasoning_effort = "high"\n', ""), "project-owned agent profile field"),
+            ("instructions", replaced.replace("Preserve this instruction.", "Changed instruction."), "outside fixed model fields"),
+            ("retired kept with rewritten comment", SPARK_FAST_WORKER.replace('model = "gpt-5.3-codex-spark"', 'model = "gpt-5.3-codex-spark"  # kept'), "field line"),
+            ("successor with changed quoting", SPARK_FAST_WORKER.replace('"gpt-5.3-codex-spark"', "'gpt-5.6-terra'"), "field line"),
+            ("successor with rewritten comment", SPARK_FAST_WORKER.replace('"gpt-5.3-codex-spark"', '"gpt-5.6-terra" # new'), "field line"),
+            ("reasoning line reformatted", replaced.replace('model_reasoning_effort = "high"', 'model_reasoning_effort  =  "high"'), "field line"),
+            ("fixed line moved", replaced.replace('model = "gpt-5.6-terra"\nmodel_reasoning_effort = "high"\n', 'model_reasoning_effort = "high"\nmodel = "gpt-5.6-terra"\n'), "outside fixed model fields"),
+        ):
+            with self.subTest(label=label):
+                agent.write_text(content, encoding="utf-8")
+                with self.assertRaisesRegex(VALIDATOR.UpdateValidationError, message):
+                    VALIDATOR.validate(repository)
+        agent.write_text(SPARK_FAST_WORKER, encoding="utf-8")
+        VALIDATOR.validate(repository)
+
+        explorer = repository / ".codex/agents/repo_explorer.toml"
+        explorer.write_text(
+            explorer.read_text(encoding="utf-8").replace('"old-model"', '"gpt-5.6-terra"'),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(VALIDATOR.UpdateValidationError, "project-owned agent profile field"):
+            VALIDATOR.validate(repository)
+
+        # An inserted default must take the updater's exact form.
+        without_effort = SPARK_FAST_WORKER.replace('model_reasoning_effort = "high"\n', "")
+        agent = self.commit_profile(repository, "fast_scoped_worker", without_effort)
+        explorer.write_text(explorer.read_text(encoding="utf-8").replace('"gpt-5.6-terra"', '"old-model"'), encoding="utf-8")
+        rendered = PROFILE_UPDATER.render_profile(
+            without_effort, *PROFILE_UPDATER.PROFILES["fast_scoped_worker"]
+        )
+        agent.write_text(rendered, encoding="utf-8")
+        VALIDATOR.validate(repository)
+        agent.write_text(
+            rendered.replace('model_reasoning_effort = "medium"', 'model_reasoning_effort = "medium" # added'),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(VALIDATOR.UpdateValidationError, "unexpected form"):
+            VALIDATOR.validate(repository)
+
+    def test_validator_admits_only_medium_for_an_absent_effort_beside_the_retired_model(self) -> None:
+        temporary, repository = self.make_repository()
+        self.addCleanup(temporary.cleanup)
+        before = 'name = "repo_explorer"\ndescription = "Reader."\nmodel = "gpt-5.3-codex-spark"\n'
+        agent = self.commit_profile(repository, "repo_explorer", before)
+        agent.write_text(
+            PROFILE_UPDATER.render_profile(before, *PROFILE_UPDATER.PROFILES["repo_explorer"]),
+            encoding="utf-8",
+        )
+        VALIDATOR.validate(repository)
+        agent.write_text(
+            before.replace("gpt-5.3-codex-spark", "gpt-5.6-terra") + 'model_reasoning_effort = "low"\n',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(VALIDATOR.UpdateValidationError, "unexpected default"):
+            VALIDATOR.validate(repository)
+
+    def test_validator_refuses_the_legacy_worker_becoming_the_former_spark_profile(self) -> None:
+        temporary, repository = self.make_repository()
+        self.addCleanup(temporary.cleanup)
+        worker = repository / ".codex/agents/sequential_plan_worker.toml"
+        terra_profile = (ROOT / "template/.codex/agents/sequential_plan_worker.toml").read_text(
+            encoding="utf-8"
+        )
+        worker.write_text(terra_profile.replace("gpt-5.6-terra", "gpt-5.3-codex-spark"), encoding="utf-8")
+        with self.assertRaisesRegex(VALIDATOR.UpdateValidationError, "outside fixed model fields"):
+            VALIDATOR.validate(repository)
+        worker.write_text(terra_profile, encoding="utf-8")
+        VALIDATOR.validate(repository)
+
+    def test_updater_output_after_a_final_line_without_newline_passes_validation(self) -> None:
+        temporary, repository = self.make_repository()
+        self.addCleanup(temporary.cleanup)
+        before = 'name = "fast_scoped_worker"\nmodel = "gpt-5.3-codex-spark"\ndescription = "Final line."'
+        agent = self.commit_profile(repository, "fast_scoped_worker", before)
+        rendered = PROFILE_UPDATER.render_profile(
+            before, *PROFILE_UPDATER.PROFILES["fast_scoped_worker"]
+        )
+        self.assertEqual(
+            rendered,
+            'name = "fast_scoped_worker"\nmodel = "gpt-5.6-terra"\n'
+            'description = "Final line."\nmodel_reasoning_effort = "medium"\n',
+        )
+        agent.write_text(rendered, encoding="utf-8")
+        VALIDATOR.validate(repository)
+        # Without an inserted default the final line may not gain anything.
+        agent.write_text(
+            before.replace("gpt-5.3-codex-spark", "gpt-5.6-terra") + "\n", encoding="utf-8"
+        )
+        with self.assertRaisesRegex(VALIDATOR.UpdateValidationError, "agent profile"):
+            VALIDATOR.validate(repository)
+        # The newline may only precede the inserted default, not an insertion
+        # placed earlier in the file.
+        agent.write_text(
+            'name = "fast_scoped_worker"\nmodel_reasoning_effort = "medium"\n'
+            'model = "gpt-5.6-terra"\ndescription = "Final line."\n',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(VALIDATOR.UpdateValidationError, "agent profile"):
+            VALIDATOR.validate(repository)
+
+    def test_profile_task_refusal_leaves_every_profile_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp)
+            agents = destination / ".codex/agents"
+            agents.mkdir(parents=True)
+            for name in PROFILE_UPDATER.PROFILES:
+                (agents / f"{name}.toml").write_text(f'name = "{name}"\n', encoding="utf-8")
+            refused = SPARK_FAST_WORKER.replace("gpt-5.3-codex-spark", "gpt-5.3-codex-spar\\u006b")
+            (agents / "sequential_plan_worker.toml").write_text(
+                refused.replace("fast_scoped_worker", "sequential_plan_worker"), encoding="utf-8"
+            )
+            before = {path.name: path.read_bytes() for path in agents.iterdir()}
+            with self.assertRaisesRegex(PROFILE_UPDATER.ProfileError, "sequential_plan_worker"):
+                PROFILE_UPDATER.normalize_destination(destination)
+            self.assertEqual({path.name: path.read_bytes() for path in agents.iterdir()}, before)
+
+
 if __name__ == "__main__":
     unittest.main()

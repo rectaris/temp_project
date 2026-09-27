@@ -872,7 +872,7 @@ def check_agent_model_profiles() -> None:
             "final high-risk judgment",
         ),
         ".codex/agents/fast_scoped_worker.toml": (
-            "gpt-5.3-codex-spark",
+            "gpt-5.6-terra",
             "medium",
             'name = "fast_scoped_worker"',
             "Require an explicit write scope and predetermined validation",
@@ -890,7 +890,7 @@ def check_agent_model_profiles() -> None:
             "Do not commit changes",
         ),
         ".codex/agents/sequential_plan_worker.toml": (
-            "gpt-5.3-codex-spark",
+            "gpt-5.6-terra",
             "medium",
             'name = "sequential_plan_worker"',
             "Do not process the next active plan",
@@ -912,7 +912,7 @@ def check_agent_model_profiles() -> None:
 def check_sandboxed_worker_fallback() -> None:
     runner = read("scripts/run-sandboxed-plan-worker.py")
     runner_markers = (
-        'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"',
+        'DEFAULT_CODEX_MODEL = "gpt-5.6-terra"',
         'DEFAULT_CODEX_REASONING = "medium"',
         'DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"',
         'DEFAULT_FALLBACK_CODEX_REASONING = "max"',
@@ -993,9 +993,17 @@ def check_sandboxed_worker_fallback() -> None:
         ".codex/skills/sequential-plan-orchestrator/SKILL.md",
     ):
         text = read(relative).lower()
-        for marker in ("gpt-5.3-codex-spark", "gpt-5.6-luna", "max", "usage limit", "rate limit"):
+        for marker in (
+            "gpt-5.6-terra", "gpt-5.6-luna", "max", "usage limit", "rate limit",
+            "gpt-5.3-codex-spark", "is retired and is never selected",
+        ):
             if marker not in text:
                 fail(f"{relative} missing sandboxed model fallback policy marker: {marker}")
+        if "spark medium" in text or "gpt-5.3-codex-spark medium" in text:
+            fail(f"{relative} still routes writable work to the retired gpt-5.3-codex-spark")
+        for line in text.splitlines():
+            if "gpt-5.3-codex-spark" in line and "retired" not in line:
+                fail(f"{relative} names gpt-5.3-codex-spark without stating that it is retired")
         for marker in (
             "admitted patch digest", "mutable lifecycle",
             "reviewer session registry", "event-chain digest", "execution genesis",
@@ -3211,7 +3219,8 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "admissible implementation slice",
         "implementation_risk",
         "implementation_ambiguity",
-        "spark medium",
+        "including `low`/`low`",
+        "`gpt-5.3-codex-spark` is retired and is never selected",
         "terra medium",
         "state path outside the repository",
         "orchestration run identifier",
@@ -3437,6 +3446,9 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
             "delegate-read-only",
         ),
     }
+    # The fixture is a sealed evaluation record. Its low/low case keeps the
+    # Spark route evaluated before gpt-5.3-codex-spark was retired; the current
+    # Terra-only route is pinned by the runner tests, not by this record.
     expected_routing_cases = {
         "routing-spark-low-low": (
             {"implementation_risk": "low", "implementation_ambiguity": "low", "preferred_model_override": None, "preferred_reasoning_override": None, "fallback_model_override": None, "fallback_reasoning_override": None},

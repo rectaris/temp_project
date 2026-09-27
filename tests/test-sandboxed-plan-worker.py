@@ -868,7 +868,7 @@ def write_fake_codex(path: Path) -> None:
             config = args[args.index("--config") + 1]
             reasoning = config.split('=', 1)[1].strip('"')
             scenario = os.environ["FAKE_CODEX_SCENARIO"]
-            primary_model = os.environ.get("FAKE_PRIMARY_MODEL", "gpt-5.3-codex-spark")
+            primary_model = os.environ.get("FAKE_PRIMARY_MODEL", "gpt-5.6-terra")
             fallback_model = os.environ.get("FAKE_FALLBACK_MODEL", "gpt-5.6-luna")
             primary_reasoning = os.environ.get("FAKE_PRIMARY_REASONING", "medium")
             fallback_reasoning = os.environ.get("FAKE_FALLBACK_REASONING", "max")
@@ -1778,8 +1778,8 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         )
     def test_codex_unavailability_classifier_is_bounded_to_cli_error_lines(self) -> None:
         cases = (
-            (b"", b"ERROR: You've hit your usage limit for GPT-5.3-Codex-Spark.", "usage_limit"),
-            (b"", b"ERROR: Usage limit exceeded for model GPT-5.3-Codex-Spark.", "usage_limit"),
+            (b"", b"ERROR: You've hit your usage limit for GPT-5.6-Terra.", "usage_limit"),
+            (b"", b"ERROR: Usage limit exceeded for model GPT-5.6-Terra.", "usage_limit"),
             (b"", b"FATAL: rate limit exceeded", "rate_limit"),
             (b"", b"ERROR: model preferred is unavailable", "model_unavailable"),
             (b"", b"ERROR: The model gpt-x does not exist or you do not have access to it.", "model_unavailable"),
@@ -1802,7 +1802,13 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             RUNNER.select_plan_writable_profile(
                 {"implementation_risk": "low", "implementation_ambiguity": "low"}
             ),
-            ("gpt-5.3-codex-spark", "medium"),
+            ("gpt-5.6-terra", "medium"),
+        )
+        self.assertEqual(
+            RUNNER.select_plan_writable_profile(
+                {"implementation_risk": "low", "implementation_ambiguity": "ordinary"}
+            ),
+            ("gpt-5.6-terra", "medium"),
         )
         self.assertEqual(
             RUNNER.select_plan_writable_profile(
@@ -1823,6 +1829,20 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             with self.subTest(values=values):
                 with self.assertRaisesRegex(RUNNER.RunnerError, "implementation"):
                     RUNNER.select_plan_writable_profile(values)
+
+    def test_no_runner_constant_selects_the_retired_spark_model(self) -> None:
+        constants = {
+            name: value
+            for name, value in vars(RUNNER).items()
+            if name.isupper() and isinstance(value, str)
+        }
+        self.assertEqual(constants["DEFAULT_CODEX_MODEL"], "gpt-5.6-terra")
+        self.assertEqual(constants["DEFAULT_CODEX_REASONING"], "medium")
+        self.assertEqual(constants["DEFAULT_FALLBACK_CODEX_MODEL"], "gpt-5.6-luna")
+        self.assertEqual(constants["DEFAULT_FALLBACK_CODEX_REASONING"], "max")
+        self.assertEqual(
+            [name for name, value in constants.items() if "spark" in value.casefold()], []
+        )
 
     def test_writable_model_and_reasoning_overrides_are_strict(self) -> None:
         self.assertEqual(RUNNER.require_writable_model("custom-writable", "preferred"), "custom-writable")
@@ -2624,7 +2644,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertNotIn("fallback_reason", worker_result)
         self.assertEqual(
             [(attempt["model"], attempt["reasoning_effort"], attempt["selected"]) for attempt in worker_result["attempts"]],
-            [("gpt-5.3-codex-spark", "medium", True)],
+            [("gpt-5.6-terra", "medium", True)],
         )
         self.assertFalse((output_dir / "worker-fallback.stdout").exists())
 
@@ -2735,7 +2755,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 for attempt in worker_result["attempts"]
             ],
             [
-                ("primary", "gpt-5.3-codex-spark", "medium", 1, False),
+                ("primary", "gpt-5.6-terra", "medium", 1, False),
                 ("fallback", "gpt-5.6-luna", "max", 0, True),
             ],
         )
@@ -2775,7 +2795,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 "schema_version": 1,
                 "orchestration_run_id": "run-routing-001",
                 "unavailable_models": [
-                    {"model": "gpt-5.3-codex-spark", "reason": "usage_limit"}
+                    {"model": "gpt-5.6-terra", "reason": "usage_limit"}
                 ],
             },
         )
@@ -2841,8 +2861,8 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertEqual(
             state["unavailable_models"],
             [
-                {"model": "gpt-5.3-codex-spark", "reason": "usage_limit"},
                 {"model": "gpt-5.6-luna", "reason": "rate_limit"},
+                {"model": "gpt-5.6-terra", "reason": "usage_limit"},
             ],
         )
         second_output = Path(temporary.name) / "both-second"
@@ -2885,7 +2905,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertTrue((output_dir / "worker-primary.stdout").is_file())
         self.assertFalse((output_dir / "worker-fallback.stdout").exists())
         entries = json.loads(state_path.read_text(encoding="utf-8"))["unavailable_models"]
-        self.assertEqual({entry["model"] for entry in entries}, {"gpt-5.3-codex-spark", "gpt-5.6-luna"})
+        self.assertEqual({entry["model"] for entry in entries}, {"gpt-5.6-terra", "gpt-5.6-luna"})
 
     def test_availability_state_schema_identity_and_size_bounds_fail_closed(self) -> None:
         temporary, repo, _plan_path = self.make_repo(["allowed.txt"])
@@ -3287,7 +3307,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertEqual(initial_manifest["telemetry"]["availability_failures"], 1)
         self.assertEqual(
             json.loads(state.read_text(encoding="utf-8"))["unavailable_models"],
-            [{"model": "gpt-5.3-codex-spark", "reason": "usage_limit"}],
+            [{"model": "gpt-5.6-terra", "reason": "usage_limit"}],
         )
         brief = root / "availability-correction-brief.txt"
         brief.write_text("Correct the candidate.\n", encoding="utf-8")
@@ -3416,7 +3436,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             {
                 "schema_version": 1,
                 "orchestration_run_id": "classification-correction-run",
-                "unavailable_models": [{"model": "gpt-5.3-codex-spark", "reason": "usage_limit"}],
+                "unavailable_models": [{"model": "gpt-5.6-terra", "reason": "usage_limit"}],
             },
         )
         self.assertTrue((output_dir / "worker-primary.stdout").is_file())
@@ -9522,7 +9542,7 @@ class WorkerBackendRegistryTests(unittest.TestCase):
                 recorded_models(),
                 [attempt["model"] for attempt in manifest["worker_result"]["attempts"]],
             )
-            self.assertEqual(recorded_models(), ["gpt-5.3-codex-spark", "gpt-5.6-luna"])
+            self.assertEqual(recorded_models(), ["gpt-5.6-terra", "gpt-5.6-luna"])
             brief = root / "correction-brief.txt"
             brief.write_text("Correct the candidate.\n", encoding="utf-8")
             correction = helper.run_correction_with_fake_codex(
@@ -9531,7 +9551,7 @@ class WorkerBackendRegistryTests(unittest.TestCase):
             )
             self.assertEqual(correction.returncode, 0, correction.stderr)
         self.assertEqual(
-            recorded_models(), ["gpt-5.3-codex-spark", "gpt-5.6-luna", "gpt-5.3-codex-spark"]
+            recorded_models(), ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-terra"]
         )
 
 

@@ -2,6 +2,16 @@
 
 ## 未リリース
 
+- 提供が終了した `gpt-5.3-codex-spark` を選ばないようにした。
+  逐次プランの書き込み用ワーカーは、`implementation_risk` と `implementation_ambiguity` のどちらも high でなければ、low/low を含めて `gpt-5.6-terra` の medium で動く。
+  どちらかが high なら委譲を拒否する点、利用不能のときに一度だけ `gpt-5.6-luna` の max へ切り替える点、Sol をレビュー専用とする点は変わらない。
+  `fast_scoped_worker` と `sequential_plan_worker` のプロファイルも、ルートと生成先の両方で `gpt-5.6-terra` の medium にした。
+  既存の生成先を update すると、宣言済みの `model = "gpt-5.3-codex-spark"` だけをその場で `gpt-5.6-terra` に置き換える。
+  宣言済みの `model_reasoning_effort` は残し、宣言がない場合だけ `medium` を補う。それ以外のモデルの値やプロジェクトの内容は書き換えない。
+  update 後の検証では、プロファイルにもとからあった行をバイト単位で位置も含めて照合し、許すのはこの置き換えと既定値の行の追加だけにした。
+  置き換えられない形の宣言があれば、どのプロファイルも書き換えずに止まる。
+  v1.2.1 の書き込み可能な `sequential_plan_worker` は、従来どおり v1.4.2 の移行で読み取り専用のプロファイルになり、そのモデルは Terra になる。
+
 - プラン開始時の一度の承認で、同じプランの4回目のレビューまで続行できるようにした。
   `standing-authorization` は最初の正式レビュー前に承認をプランと実行開始記録へ結び付ける。
   続行のたびに `derive-authorization` で個別の認可と派生記録を作り、`verify-authorization` で対応を確認する。

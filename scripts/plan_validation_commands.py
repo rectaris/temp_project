@@ -49,6 +49,7 @@ PYTHON_SCRIPT_ARGUMENTS = {
     "tests/test-plan-restructure.py": {()},
     "tests/test-plan-execution-state.py": {()},
     "tests/test-sandboxed-plan-worker.py": {()},
+    "tests/test-copier-migration.py": {()},
     "tests/test-validation-tools.py": {()},
     "tests/test-referent-contract.py": {()},
     "tests/test-hooks.py": {()},

@@ -22,7 +22,7 @@ NON_REPOSITORY_DIAGNOSIS = (
     "fatal: not a git repository (or any of the parent directories): .git"
 )
 OWNERSHIP_PATH = ".project-agent-workflow/ownership.yaml"
-CURRENT_OWNERSHIP_SHA256 = "106567d1dadb9d44c5c0333fe5d9ac4024507e2aa116e0517e3134e8cba94c93"
+CURRENT_OWNERSHIP_SHA256 = "9fbda9c0c795dd05560f0c1c43bf8a91cb70bc9fc6ee50a086765af1695bf536"
 OWNERSHIP_MAX_BYTES = 64 * 1024
 JAPANESE_ROUTING_PATH = ".agents/skills/natural-japanese/SKILL.md"
 JAPANESE_ROUTING_LINES = frozenset(
@@ -60,16 +60,29 @@ def markdown_indentation(line: str) -> tuple[int, str]:
         index += 1
     return columns, line[index:]
 LEGACY_SEQUENTIAL_WORKER_SHA256 = "744ed4f634e13ec1de27076dfa9f12411a8b01ff56ba27cfbc5151086fbe1ccb"
-READ_ONLY_SEQUENTIAL_WORKER_SHA256 = "6011c848311f59e18a37f511af8620cc025e8cad72a54fc767a83dd8da7837d1"
+READ_ONLY_SEQUENTIAL_WORKER_SHA256 = "f4d370f20e5fc622ff5067674a8d2f06e57ccb72f7f5701a657b21509e6edef7"
 SEEDED_AGENT_PROFILES = {
     "change_reviewer": ("gpt-5.6-sol", "high"),
     "docs_researcher": ("gpt-5.6-luna", "medium"),
     "evidence_synthesizer": ("gpt-5.6-luna", "xhigh"),
-    "fast_scoped_worker": ("gpt-5.3-codex-spark", "medium"),
+    "fast_scoped_worker": ("gpt-5.6-terra", "medium"),
     "repo_explorer": ("gpt-5.6-luna", "low"),
     "scoped_worker": ("gpt-5.6-terra", "medium"),
-    "sequential_plan_worker": ("gpt-5.3-codex-spark", "medium"),
+    "sequential_plan_worker": ("gpt-5.6-terra", "medium"),
 }
+# A declared retired model is not a project choice. Its successor may replace
+# it, a declared reasoning effort must survive, and an absent effort may appear
+# only as the successor's medium default.
+RETIRED_AGENT_MODEL = "gpt-5.3-codex-spark"
+RETIRED_AGENT_MODEL_REPLACEMENT = ("gpt-5.6-terra", "medium")
+RETIRED_AGENT_MODEL_LINE = re.compile(
+    r"^(?P<prefix>[ \t]*(?:model|\"model\"|'model')[ \t]*=[ \t]*)"
+    r"(?P<quote>[\"'])gpt-5\.3-codex-spark(?P=quote)"
+    r"(?P<suffix>[ \t]*(?:#.*)?)$"
+)
+INSERTED_AGENT_FIELD_LINE = re.compile(
+    r'^[ \t]*(?:model|model_reasoning_effort) = "[^"\\]*"(?:\r\n|\n)?$'
+)
 ROOT_ASSIGNMENT = re.compile(
     r"^[ \t]*(?P<field>model|model_reasoning_effort|\"model\"|\"model_reasoning_effort\"|'model'|'model_reasoning_effort')[ \t]*="
 )
@@ -320,22 +333,89 @@ def multiline_delimiter(line: str) -> str | None:
     return None
 
 
-def without_fixed_agent_lines(text: str) -> str:
-    kept: list[str] = []
+def agent_profile_lines(text: str) -> list[tuple[str | None, str]]:
+    """Split a profile into its lines and name each root fixed-field assignment."""
+    lines: list[tuple[str | None, str]] = []
     delimiter: str | None = None
     in_root = True
     for line in text.splitlines(keepends=True):
         if delimiter is not None:
-            kept.append(line)
+            lines.append((None, line))
             if (end := scan_multiline_string(line, 0, delimiter)) is not None:
                 delimiter = multiline_delimiter(line[end:])
             continue
         if line.lstrip().startswith("["):
             in_root = False
-        if not (in_root and ROOT_ASSIGNMENT.match(line)):
-            kept.append(line)
+        match = ROOT_ASSIGNMENT.match(line) if in_root else None
+        lines.append((match.group("field").strip("\"'") if match else None, line))
         delimiter = multiline_delimiter(line)
-    return "".join(kept)
+    return lines
+
+
+def retired_model_replacement_line(line: str) -> str | None:
+    body = line.rstrip("\r\n")
+    match = RETIRED_AGENT_MODEL_LINE.fullmatch(body)
+    if match is None:
+        return None
+    quote = match.group("quote")
+    return (
+        f"{match.group('prefix')}{quote}{RETIRED_AGENT_MODEL_REPLACEMENT[0]}{quote}"
+        f"{match.group('suffix')}{line[len(body):]}"
+    )
+
+
+def validate_agent_profile_bytes(
+    path: str, before_text: str, after_text: str, declared: dict[str, object], retired: bool
+) -> None:
+    # Every line the project already had survives byte for byte and in place.
+    # The one permitted rewrite substitutes the successor for the retired model
+    # value on its own line, and an inserted default takes the updater's form.
+    kept: list[tuple[str | None, str]] = []
+    inserted_after_last_kept = False
+    for field, line in agent_profile_lines(after_text):
+        if field is not None and field not in declared:
+            if INSERTED_AGENT_FIELD_LINE.fullmatch(line) is None:
+                raise UpdateValidationError(
+                    f"Copier update inserted an agent profile default in an unexpected form: {path} ({field})"
+                )
+            inserted_after_last_kept = True
+            continue
+        kept.append((field, line))
+        inserted_after_last_kept = False
+    original = agent_profile_lines(before_text)
+    if len(kept) != len(original):
+        raise UpdateValidationError(
+            f"Copier update changed project-owned agent profile content outside fixed model fields: {path}"
+        )
+    for index, ((before_field, before_line), (after_field, after_line)) in enumerate(
+        zip(original, kept)
+    ):
+        if before_field == after_field and before_line == after_line:
+            continue
+        # Inserting a default after a final line that has no newline must end
+        # that line first; that newline is the only byte such a line may gain.
+        if (
+            inserted_after_last_kept
+            and index == len(original) - 1
+            and before_field == after_field
+            and not before_line.endswith(("\r", "\n"))
+            and after_line in {before_line + "\n", before_line + "\r\n"}
+        ):
+            continue
+        if before_field is None or before_field != after_field:
+            raise UpdateValidationError(
+                f"Copier update changed project-owned agent profile content outside fixed model fields: {path}"
+            )
+        if (
+            before_field == "model"
+            and retired
+            and after_line == retired_model_replacement_line(before_line)
+        ):
+            continue
+        raise UpdateValidationError(
+            "Copier update rewrote a project-owned agent profile field line: "
+            f"{path} ({before_field})"
+        )
 
 
 def validate_agent_profile_transition(path: str, before: bytes, after: bytes) -> None:
@@ -360,25 +440,27 @@ def validate_agent_profile_transition(path: str, before: bytes, after: bytes) ->
         raise UpdateValidationError(
             f"changed agent profile is not a seeded profile: {path}"
         )
+    retired = previous.get("model") == RETIRED_AGENT_MODEL
+    defaults = RETIRED_AGENT_MODEL_REPLACEMENT if retired else seeded
     for index, field in enumerate(("model", "model_reasoning_effort")):
         # Ownership is per field: a field the project already declared may only
         # survive unchanged, and a field it never declared may only appear as
-        # this profile's seeded default.
+        # this profile's seeded default. The retired model is the one declared
+        # value that may change, and only to its successor.
         if field in previous:
-            if parsed.get(field) != previous[field]:
-                raise UpdateValidationError(
-                    "Copier update replaced a project-owned agent profile field: "
-                    f"{path} ({field})"
-                )
-            continue
-        if parsed.get(field) != seeded[index]:
+            if parsed.get(field) == previous[field]:
+                continue
+            if field == "model" and retired and parsed.get(field) == defaults[index]:
+                continue
+            raise UpdateValidationError(
+                "Copier update replaced a project-owned agent profile field: "
+                f"{path} ({field})"
+            )
+        if parsed.get(field) != defaults[index]:
             raise UpdateValidationError(
                 f"changed agent profile has an unexpected default {field}: {path}"
             )
-    if without_fixed_agent_lines(before_text) != without_fixed_agent_lines(after_text):
-        raise UpdateValidationError(
-            f"Copier update changed project-owned agent profile content outside fixed model fields: {path}"
-        )
+    validate_agent_profile_bytes(path, before_text, after_text, previous, retired)
 
 
 def inspect_project_owned_content(repository: Path) -> None:

@@ -60,7 +60,7 @@ def require_sequential_worker() -> None:
     text = path.read_text(encoding="utf-8")
     required = (
         'name = "sequential_plan_worker"',
-        'model = "gpt-5.3-codex-spark"',
+        'model = "gpt-5.6-terra"',
         'model_reasoning_effort = "medium"',
         'sandbox_mode = "read-only"',
         "Do not process the next active plan",
@@ -74,15 +74,24 @@ def require_sequential_worker() -> None:
             fail(f"sequential worker missing required contract: {marker}")
 
 
+def require_spark_named_only_as_retired(relative: str, text: str) -> None:
+    lowered = text.lower()
+    if "spark medium" in lowered or "gpt-5.3-codex-spark medium" in lowered:
+        fail(f"{relative} still routes writable work to the retired gpt-5.3-codex-spark")
+    for line in lowered.splitlines():
+        if "gpt-5.3-codex-spark" in line and "retired" not in line:
+            fail(f"{relative} names gpt-5.3-codex-spark without stating that it is retired")
+
+
 def require_agent_model_profiles() -> None:
     expected = {
         "change_reviewer": ("gpt-5.6-sol", "high"),
         "docs_researcher": ("gpt-5.6-luna", "medium"),
         "evidence_synthesizer": ("gpt-5.6-luna", "xhigh"),
-        "fast_scoped_worker": ("gpt-5.3-codex-spark", "medium"),
+        "fast_scoped_worker": ("gpt-5.6-terra", "medium"),
         "repo_explorer": ("gpt-5.6-luna", "low"),
         "scoped_worker": ("gpt-5.6-terra", "medium"),
-        "sequential_plan_worker": ("gpt-5.3-codex-spark", "medium"),
+        "sequential_plan_worker": ("gpt-5.6-terra", "medium"),
     }
     for name, (model, effort) in expected.items():
         text = read(f"template/.codex/agents/{name}.toml")
@@ -96,7 +105,7 @@ def require_fast_scoped_worker() -> None:
     text = path.read_text(encoding="utf-8")
     required = (
         'name = "fast_scoped_worker"',
-        'model = "gpt-5.3-codex-spark"',
+        'model = "gpt-5.6-terra"',
         'model_reasoning_effort = "medium"',
         'sandbox_mode = "workspace-write"',
         "Require an explicit write scope and predetermined validation",
@@ -160,7 +169,8 @@ def require_orchestration_policy_markers() -> None:
         "admissible implementation slice",
         "implementation_risk",
         "implementation_ambiguity",
-        "spark medium",
+        "including `low`/`low`",
+        "`gpt-5.3-codex-spark` is retired and is never selected",
         "terra medium",
         "state path outside the repository",
         "orchestration run identifier",
@@ -1770,7 +1780,7 @@ def require_sandboxed_plan_worker_alignment() -> None:
         if marker not in execution_state_text:
             fail(f"plan execution state missing confirmed-diagnosis marker: {marker}")
     for marker in (
-        'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"',
+        'DEFAULT_CODEX_MODEL = "gpt-5.6-terra"',
         'DEFAULT_CODEX_REASONING = "medium"',
         'DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"',
         'DEFAULT_FALLBACK_CODEX_REASONING = "max"',
@@ -1848,11 +1858,13 @@ def require_sandboxed_plan_worker_alignment() -> None:
     ):
         text = read(relative).lower()
         for marker in (
-            "gpt-5.3-codex-spark", "gpt-5.6-luna", "max", "usage limit", "rate limit",
+            "gpt-5.6-terra", "gpt-5.6-luna", "max", "usage limit", "rate limit",
             "primary_invariant", "exact file", "read-only", "contract",
+            "gpt-5.3-codex-spark", "is retired and is never selected",
         ):
             if marker not in text:
                 fail(f"{relative} missing sandboxed model fallback policy marker: {marker}")
+        require_spark_named_only_as_retired(relative, text)
 
     planlib = read("template/.project-agent-workflow/scripts/planlib.py")
     for marker in (
@@ -2954,6 +2966,46 @@ def require_documented_release_version() -> None:
         )
 
 
+def load_script_module(name: str, path: Path) -> Any:
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        fail(f"could not load {path.relative_to(ROOT)}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def require_retired_model_transition_alignment(validator_path: Path, migration_path: Path) -> None:
+    validator = load_script_module("copier_template_update_validator", validator_path)
+    updater = load_script_module(
+        "copier_template_profile_updater", ROOT / "scripts/update_agent_model_profiles.py"
+    )
+    migration = load_script_module("copier_template_worker_migration", migration_path)
+    if validator.SEEDED_AGENT_PROFILES != updater.PROFILES:
+        fail("Copier update validator seeded profiles differ from the profile updater")
+    if (validator.RETIRED_AGENT_MODEL, validator.RETIRED_AGENT_MODEL_REPLACEMENT) != (
+        updater.RETIRED_MODEL,
+        updater.RETIRED_MODEL_REPLACEMENT,
+    ) or updater.RETIRED_MODEL_REPLACEMENT != ("gpt-5.6-terra", "medium"):
+        fail("retired agent model replacement differs between the updater and the validator")
+    if validator.RETIRED_AGENT_MODEL_LINE.pattern != updater.RETIRED_MODEL_LINE.pattern:
+        fail("retired model line form differs between the updater and the validator")
+    if any(model == updater.RETIRED_MODEL for model, _ in updater.PROFILES.values()):
+        fail("a seeded agent profile still selects the retired model")
+    legacy_digest = hashlib.sha256(migration.LEGACY_PROFILE.encode("utf-8")).hexdigest()
+    read_only_digest = hashlib.sha256(migration.READ_ONLY_PROFILE.encode("utf-8")).hexdigest()
+    if not (
+        validator.LEGACY_SEQUENTIAL_WORKER_SHA256
+        == updater.LEGACY_SEQUENTIAL_WORKER_SHA256
+        == legacy_digest
+    ):
+        fail("legacy sequential worker digest differs from the migration input")
+    if validator.READ_ONLY_SEQUENTIAL_WORKER_SHA256 != read_only_digest:
+        fail("read-only sequential worker digest differs from the migration output")
+    if migration.READ_ONLY_PROFILE != read("template/.codex/agents/sequential_plan_worker.toml"):
+        fail("sequential worker migration output differs from the seeded read-only profile")
+
+
 def require_copier_documentation_contract() -> None:
     command_docs = (
         "README.md",
@@ -3007,7 +3059,10 @@ def require_copier_documentation_contract() -> None:
         "references/template-development.md": (
             "Require `--trust` for every documented copy and update command",
             "the template supplies those two fields only when they are absent",
-            "preserve every declared model field, instructions, and every unrelated project-owned field",
+            "may replace only a declared retired `gpt-5.3-codex-spark` model with `gpt-5.6-terra`",
+            "keeps a declared `model_reasoning_effort` and supplies `medium` only when the field is absent",
+            "leaves the exact v1.2.1 workspace-write `sequential_plan_worker.toml` for the v1.4.2 migration",
+            "preserve every other declared model field, instructions, and every unrelated project-owned field",
         ),
         "template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md": (
             "## Non-Destructive Update Contract",
@@ -3015,13 +3070,19 @@ def require_copier_documentation_contract() -> None:
             ".project-agent-workflow/scripts/update-from-copier.sh",
             "The `model` and `model_reasoning_effort` fields are the only exceptions.",
             "A value the project already declares stays exactly as declared",
-            "Replacing a model field the project already declared is rejected.",
+            "The retired model `gpt-5.3-codex-spark` is the one declared value the template replaces.",
+            "keeps a declared `model_reasoning_effort`, and supplies `medium` only when that field is absent",
+            "the replacement of a declared retired `gpt-5.3-codex-spark` model with `gpt-5.6-terra`",
+            "Replacing any other model field the project already declared is rejected.",
+            "every line the project already had must survive byte for byte and in place",
             "`--trust` authorizes the bundled task; it does not prove that the resulting diff is safe to commit.",
         ),
         "template/.project-agent-workflow/ownership.yaml": (
             "field_overrides:",
             "  - path: .codex/agents/*.toml",
             "    template_default_when_absent:\n      - model\n      - model_reasoning_effort",
+            "    retired_model_replacements:\n      - retired: gpt-5.3-codex-spark\n"
+            "        replacement: gpt-5.6-terra\n        reasoning_default_when_absent: medium",
             "    project_owned_remainder: true",
         ),
     }
@@ -3089,6 +3150,8 @@ def require_copier_documentation_contract() -> None:
     ):
         if marker not in update_helper:
             fail(f"generated Copier update helper missing marker: {marker}")
+
+    require_retired_model_transition_alignment(source_validator, source_worker_migration)
 
 
 def workflow_job(text: str, job_name: str) -> str:

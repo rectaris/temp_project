@@ -602,8 +602,15 @@ if ! grep -q '^_commit: v1.4.2$' "$worker_contract_out/.copier-answers.yml"; the
   sed -n '1,12p' "$worker_contract_out/.copier-answers.yml" >&2
   exit 1
 fi
+# The v1.2.1 workspace-write worker still declares the retired Spark model.
+# The profile task leaves those exact bytes for the v1.4.2 migration, which
+# ends the worker read-only on Terra, while the Spark fast worker is replaced
+# in place.
 cmp "$root/template/.codex/agents/sequential_plan_worker.toml" \
   "$worker_contract_out/.codex/agents/sequential_plan_worker.toml"
+grep -q '^model = "gpt-5.6-terra"$' "$worker_contract_out/.codex/agents/sequential_plan_worker.toml"
+grep -q '^model = "gpt-5.6-terra"$' "$worker_contract_out/.codex/agents/fast_scoped_worker.toml"
+grep -q '^model_reasoning_effort = "medium"$' "$worker_contract_out/.codex/agents/fast_scoped_worker.toml"
 test "$worker_contract_agents_before" = "$(fixture_git "$worker_contract_out" hash-object AGENTS.md)"
 printf '\nUnexpected update overwrite.\n' >>"$worker_contract_out/AGENTS.md"
 if python3 "$validator" --destination "$worker_contract_out" >/dev/null 2>&1; then
@@ -611,6 +618,50 @@ if python3 "$validator" --destination "$worker_contract_out" >/dev/null 2>&1; th
   exit 1
 fi
 fixture_git "$worker_contract_out" restore AGENTS.md
+
+# gpt-5.3-codex-spark is retired, so an update replaces exactly that declared
+# model with gpt-5.6-terra in place. A declared non-medium reasoning effort
+# survives, and every other project-owned byte stays as committed.
+retired_model_out="$tmp/v141-to-current-retired-model"
+run_copier copy -q -f --trust --defaults --vcs-ref v1.4.1 \
+  --data-file "$root/tests/fixtures/docs.answers.yml" "$update_source" "$retired_model_out" >/dev/null
+fixture_git "$retired_model_out" init -b main >/dev/null
+fixture_git "$retired_model_out" config user.email "ci@example.invalid"
+fixture_git "$retired_model_out" config user.name "CI"
+retired_fast_worker="$retired_model_out/.codex/agents/fast_scoped_worker.toml"
+retired_sequential_worker="$retired_model_out/.codex/agents/sequential_plan_worker.toml"
+sed -i 's/^model_reasoning_effort = "medium"$/model_reasoning_effort = "high"/' "$retired_fast_worker"
+printf '\nProject-owned retired-model policy marker.\n' >>"$retired_model_out/AGENTS.md"
+fixture_git "$retired_model_out" add -A
+fixture_git "$retired_model_out" commit -m "Create v1.4.1 retired-model fixture" >/dev/null
+grep -q '^model = "gpt-5.3-codex-spark"$' "$retired_fast_worker"
+grep -q '^model_reasoning_effort = "high"$' "$retired_fast_worker"
+grep -q '^model = "gpt-5.3-codex-spark"$' "$retired_sequential_worker"
+grep -q '^sandbox_mode = "read-only"$' "$retired_sequential_worker"
+retired_fast_expected="$tmp/v141-retired-fast-scoped-worker.toml"
+sed 's/^model = "gpt-5.3-codex-spark"$/model = "gpt-5.6-terra"/' "$retired_fast_worker" >"$retired_fast_expected"
+retired_sequential_expected="$tmp/v141-retired-sequential-worker.toml"
+sed 's/^model = "gpt-5.3-codex-spark"$/model = "gpt-5.6-terra"/' "$retired_sequential_worker" >"$retired_sequential_expected"
+run_copier update -q --trust --defaults --vcs-ref v1.4.2 "$retired_model_out" >/dev/null
+grep -q '^_commit: v1.4.2$' "$retired_model_out/.copier-answers.yml"
+cmp "$retired_fast_expected" "$retired_fast_worker"
+cmp "$retired_sequential_expected" "$retired_sequential_worker"
+cmp "$root/template/.codex/agents/sequential_plan_worker.toml" "$retired_sequential_worker"
+retired_changed_profiles=$(fixture_git "$retired_model_out" diff --name-only HEAD -- .codex/agents)
+if [ "$retired_changed_profiles" != "$(printf '%s\n%s' \
+  .codex/agents/fast_scoped_worker.toml .codex/agents/sequential_plan_worker.toml)" ]; then
+  echo "retired-model update changed an unexpected agent profile: $retired_changed_profiles" >&2
+  exit 1
+fi
+if ! fixture_git "$retired_model_out" diff --quiet HEAD -- AGENTS.md README.md docs; then
+  echo "retired-model update changed project-owned policy bytes" >&2
+  exit 1
+fi
+python3 "$validator" --destination "$retired_model_out" >/dev/null
+if grep -q 'gpt-5.3-codex-spark' "$retired_model_out"/.codex/agents/*.toml; then
+  echo "retired-model update left a seeded profile on gpt-5.3-codex-spark" >&2
+  exit 1
+fi
 
 wrapper_self_update_out="$tmp/v141-to-current-wrapper-self-update"
 wrapper_self_update_cwd="$tmp/v141-wrapper-outside-cwd"
@@ -797,8 +848,7 @@ seeded_agent_profile_model() {
   case "$1" in
     change_reviewer) echo gpt-5.6-sol ;;
     docs_researcher|evidence_synthesizer|repo_explorer) echo gpt-5.6-luna ;;
-    scoped_worker) echo gpt-5.6-terra ;;
-    fast_scoped_worker|sequential_plan_worker) echo gpt-5.3-codex-spark ;;
+    scoped_worker|fast_scoped_worker|sequential_plan_worker) echo gpt-5.6-terra ;;
   esac
 }
 
@@ -865,9 +915,12 @@ assert_managed_orchestration_reports() {
   grep -q 'run-sandboxed-plan-worker.py' "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
   grep -q 'sequential_plan_worker' "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
   grep -q 'The main agent owns task interpretation, integration, validation acceptance, planning updates, commits, and the final report.' "$managed_orchestration"
-  grep -q '^DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q '^DEFAULT_CODEX_MODEL = "gpt-5.6-terra"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
   grep -q '^DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-  grep -q '^TERRA_CODEX_MODEL = "gpt-5.6-terra"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  if grep -qi 'spark' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"; then
+    echo "updated writable runner still names the retired gpt-5.3-codex-spark: $out" >&2
+    exit 1
+  fi
   grep -q 'def select_plan_writable_profile' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
   grep -q 'def open_availability_state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
   grep -q -- '--availability-state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
@@ -1157,7 +1210,10 @@ fi
 
 latest_out=$(prepare_lane latest-stable "$latest_ref" "$root/tests/fixtures/python.answers.yml")
 (cd "$latest_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
-agent_profile_expectations="change_reviewer:-:max docs_researcher:gpt-5.4-mini:- scoped_worker:gpt-5.5:high"
+# Adoption recopies without the v1.4.2 migration, so the exact v1.2.1-era
+# workspace-write worker that v0.4.6 seeded keeps its bytes, including the
+# retired model, for that migration; only the other seeded fields change.
+agent_profile_expectations="change_reviewer:-:max docs_researcher:gpt-5.4-mini:- scoped_worker:gpt-5.5:high sequential_plan_worker:gpt-5.3-codex-spark:-"
 validate_common_lane "$latest_out"
 agent_profile_expectations=""
 test -f "$latest_out/docs/agent/SPEC_COPIER_ADOPTION.md"
@@ -1669,7 +1725,10 @@ fixture_git "$mature_out" commit -m "Customize mature project workflow" >/dev/nu
 
 run_adoption "$mature_out" "$target_ref" >/dev/null
 (cd "$mature_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
-agent_profile_expectations="change_reviewer:-:max docs_researcher:legacy-model:legacy-effort scoped_worker:seed-equal-value:-"
+# Adoption recopies without the v1.4.2 migration, so the exact v1.2.1-era
+# workspace-write worker that v0.4.6 seeded keeps its bytes, including the
+# retired model, for that migration; only the other seeded fields change.
+agent_profile_expectations="change_reviewer:-:max docs_researcher:legacy-model:legacy-effort scoped_worker:seed-equal-value:- sequential_plan_worker:gpt-5.3-codex-spark:-"
 validate_common_lane "$mature_out"
 agent_profile_expectations=""
 grep -q 'Keep this project instruction.' "$mature_out/.codex/agents/docs_researcher.toml"
@@ -1761,7 +1820,11 @@ for plan_dir in active backlog checked handoffs; do
 done
 fixture_git "$v111_out" commit -m "Remove plan directory placeholders" >/dev/null
 run_copier update -q -f --trust --vcs-ref v1.2.1 "$v111_out" >/dev/null
+# The released v1.2.1 template predates the Spark retirement, so this
+# historical target still seeds its two Spark profiles.
+agent_profile_expectations="fast_scoped_worker:gpt-5.3-codex-spark:- sequential_plan_worker:gpt-5.3-codex-spark:-"
 assert_agent_profiles "$v111_out"
+agent_profile_expectations=""
 for plan_dir in active backlog checked handoffs; do
   if [ -e "$v111_out/docs/plan/$plan_dir/.gitkeep" ]; then
     echo "copier update recreated removed plan placeholder: docs/plan/$plan_dir/.gitkeep" >&2
