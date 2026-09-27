@@ -11,6 +11,7 @@ human_approval_status: not_required
 implementation_tier: 2
 implementation_risk: high
 implementation_ambiguity: ordinary
+standing_continuation_authorization: 420 プランはすでに実装されているため、 こちらに 4回レビューまで承認を求めなくともよいようにしていたはずだが
 plan_purpose: implementation
 feasibility_evidence:
   - {"evidence":"On 2026-09-26 running the runner suite with the repository .venv Python failed three cases with bwrap: execvp .../.venv/bin/python3: No such file or directory, because .venv/bin/python3 links to ~/.local/share/uv/python/cpython-3.13.2-linux-x86_64-gnu/bin/python3.13 outside every sandbox mount.","kind":"reproduced_defect"}
@@ -86,3 +87,4 @@ checked_summary_ja: ランナーを uv の仮想環境の Python で動かして
 ## Validation Notes
 
 - Owner instruction on 2026-09-26 asked to define these environment and workflow changes as rules and to create plans for them: create each task worktree's .venv with uv, let Bubblewrap run the .venv Python, replace the retired gpt-5.3-codex-spark with gpt-5.6-terra medium, fix the check-time plan-id reservations, and approve continuations up to the fourth review once at plan start (option A).
+- standing_continuation_authorization quotes the owner's words of 2026-09-27, given in the plan 421 conversation after it asked twice for continuation approval. The owner then chose to record that approval in the plan file (「2 の計画で作成する。」); plan 424 added the field here.

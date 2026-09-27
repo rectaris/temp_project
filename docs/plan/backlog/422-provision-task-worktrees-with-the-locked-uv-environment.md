@@ -12,6 +12,7 @@ human_approval_status: not_required
 implementation_tier: 2
 implementation_risk: ordinary
 implementation_ambiguity: ordinary
+standing_continuation_authorization: 420 プランはすでに実装されているため、 こちらに 4回レビューまで承認を求めなくともよいようにしていたはずだが
 plan_purpose: implementation
 feasibility_evidence:
   - {"evidence":"references/validation.md already prescribes uv sync --locked and uv run --locked scripts/lint-project-workflow.sh, tests/smoke.sh and tests/copier-update.sh, and pyproject.toml with uv.lock pins ruff 0.15.7, copier and PyYAML, but manage-plan-worktrees.py create_worktree provisions no environment.","kind":"existing_mechanism"}
@@ -91,3 +92,4 @@ checked_summary_ja: 新しいタスクの worktree を作るときに uv sync --
 ## Validation Notes
 
 - Owner instruction on 2026-09-26 asked to define these environment and workflow changes as rules and to create plans for them: create each task worktree's .venv with uv, let Bubblewrap run the .venv Python, replace the retired gpt-5.3-codex-spark with gpt-5.6-terra medium, fix the check-time plan-id reservations, and approve continuations up to the fourth review once at plan start (option A).
+- standing_continuation_authorization quotes the owner's words of 2026-09-27, given in the plan 421 conversation after it asked twice for continuation approval. The owner then chose to record that approval in the plan file (「2 の計画で作成する。」); plan 424 added the field here.

@@ -72,6 +72,7 @@ SCALAR_KEYS = {
     "shelved_reason",
     "shelved_at",
     "primary_invariant",
+    "standing_continuation_authorization",
     "execution_group",
     "replan_source",
     "replan_contract",

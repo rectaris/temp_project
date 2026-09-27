@@ -3123,6 +3123,11 @@ def check_owner_resolution_boundary() -> None:
         fail("owner acceptance must carry its own bound evidence keys")
     if "standing_authorization_recorded" in module.RECORD_EVENT_TYPES:
         fail("standing authorization must not be recordable through the generic record command")
+    if (
+        set(module.STANDING_PLACEHOLDER_VALUES) != ADMISSION_PLACEHOLDER_VALUES
+        or set(load_planlib_module().ADMISSION_PLACEHOLDER_VALUES) != ADMISSION_PLACEHOLDER_VALUES
+    ):
+        fail("standing owner quotations must refuse the shared admission placeholder vocabulary")
     standing_clause = (
         "A standing authorization given at plan start counts as the owner decision "
         "for each eligible same-plan continuation up to the fourth review."
@@ -3140,6 +3145,7 @@ def check_owner_resolution_boundary() -> None:
         for marker in (
             standing_clause, "standing-authorization", "derive-authorization",
             "verify-authorization", "`resolve-owner` and `owner-accept` require fresh owner records",
+            "`standing_continuation_authorization`", "verbatim words", "infer",
         ):
             if marker not in policy:
                 fail(f"{relative} missing standing-authorization rule: {marker}")
@@ -3862,9 +3868,83 @@ def check_plan_admission(relative: str, values: dict[str, str | list[str]]) -> N
             )
 
 
+STANDING_FIELD = "standing_continuation_authorization"
+STANDING_FIELD_MAX_BYTES = 400
+
+
+def standing_field_error(text: str) -> str | None:
+    """Return why a plan's standing_continuation_authorization is malformed, if it is.
+
+    This reads the field exactly as the execution ledger does: keys are found
+    the way the restructuring and plan-library parsers find them, and the field
+    is admitted only in the leading manifest, which ends at the first `## `
+    heading, in its canonical spelling, once, and as the owner's bounded
+    non-placeholder words on one strictly single line.
+    """
+
+    in_manifest = True
+    found: list[str] = []
+    for line in text.splitlines(keepends=True):
+        bare = line.rstrip()
+        if bare.startswith("## "):
+            in_manifest = False
+        if bare.startswith(" ") or ":" not in bare:
+            continue
+        if bare.split(":", 1)[0].strip() != STANDING_FIELD:
+            continue
+        if not in_manifest:
+            return f"declares {STANDING_FIELD} outside its leading manifest"
+        if not line.startswith(STANDING_FIELD + ":"):
+            return f"spells {STANDING_FIELD} noncanonically"
+        found.append(line[:-1] if line.endswith("\n") else line)
+    if not found:
+        return None
+    if len(found) != 1:
+        return f"declares {STANDING_FIELD} more than once"
+    raw = found[0][len(STANDING_FIELD) + 1:]
+    value = raw[1:] if raw.startswith(" ") else ""
+    if (
+        not bounded_admission_text(value, STANDING_FIELD_MAX_BYTES)
+        or value.lower() in ADMISSION_PLACEHOLDER_VALUES
+        or value.splitlines() != [value]
+        or any(ord(char) == 0x7F for char in value)
+    ):
+        return (
+            f"{STANDING_FIELD} must hold the owner's bounded non-placeholder "
+            "single-line words"
+        )
+    return None
+
+
+def self_test_standing_field() -> None:
+    words = "4回目のレビューまで、この計画の続行を承認する。"
+    if standing_field_error(f"status: backlog\n{STANDING_FIELD}: {words}\n") is not None:
+        fail("self-test rejected a bounded standing_continuation_authorization")
+    if standing_field_error("status: backlog\n") is not None:
+        fail("self-test rejected a plan without standing_continuation_authorization")
+    for malformed in (
+        f"{STANDING_FIELD}:\n",
+        f"{STANDING_FIELD}: TODO\n",
+        f"{STANDING_FIELD}: t.b.d.\n",
+        f"{STANDING_FIELD}: {'x' * 401}\n",
+        f"{STANDING_FIELD}:  {words}\n",
+        f"{STANDING_FIELD}: {words}\r\n",
+        f"{STANDING_FIELD}: {words}\u2028tail\n",
+        f"{STANDING_FIELD}:{words}\n",
+        f"{STANDING_FIELD} : {words}\n",
+        f"\t{STANDING_FIELD}: {words}\n",
+        f"{STANDING_FIELD}: {words}\n{STANDING_FIELD}\t: {words}\n",
+        f"{STANDING_FIELD}: {words}\n{STANDING_FIELD}: {words}\n",
+        f"status: backlog\n\n## Decisions\n\n{STANDING_FIELD}: {words}\n",
+    ):
+        if standing_field_error(malformed) is None:
+            fail(f"self-test accepted a malformed standing field: {malformed!r}")
+
+
 def check_plan_admission_boundary() -> None:
     """Admit new root plans only as bounded implementation authorizations."""
 
+    self_test_standing_field()
     for directory in ("docs/plan/active", "docs/plan/backlog"):
         plan_dir = ROOT / directory
         if not plan_dir.is_dir():
@@ -3873,10 +3953,14 @@ def check_plan_admission_boundary() -> None:
             match = PLAN_FILE_RE.fullmatch(path.name)
             if match is None:
                 fail(f"{directory}/{path.name} is not a normalized plan filename")
+            relative = str(path.relative_to(ROOT))
+            text = path.read_text(encoding="utf-8")
+            standing_error = standing_field_error(text)
+            if standing_error is not None:
+                fail(f"{relative} {standing_error}")
             if int(match.group(1)) < ROOT_ADMISSION_BOUNDARY_PLAN_ID:
                 continue
-            relative = str(path.relative_to(ROOT))
-            check_plan_admission(relative, parse_plan_manifest(path.read_text(encoding="utf-8")))
+            check_plan_admission(relative, parse_plan_manifest(text))
 
 
 def load_parallel_group_module():

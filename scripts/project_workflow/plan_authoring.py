@@ -226,7 +226,11 @@ COMMON_REQUIRED_KEYS = (
 COMMON_OPTIONAL_KEYS = (
     "integration_gates",
     "validation_notes",
+    "standing_continuation_authorization",
 )
+# The owner's verbatim words that count as the standing continuation
+# authorization at plan start. Bounded like the execution ledger's quotation.
+STANDING_AUTHORIZATION_MAX_BYTES = 400
 PROFILE_REQUIRED_KEYS = {
     PROFILE_ROOT: ("primary_invariant", "implementation_tier"),
     PROFILE_GENERATED: ("target_json", "acceptance_focus", "problem", "goal",
@@ -660,6 +664,23 @@ def build_document(
             data.get("validation_notes", []), "validation_notes", MAX_SECTION_ENTRIES, MAX_SECTION_BYTES
         ),
     }
+    if "standing_continuation_authorization" in data:
+        standing = bounded_text(
+            data["standing_continuation_authorization"],
+            "standing_continuation_authorization",
+            STANDING_AUTHORIZATION_MAX_BYTES,
+        )
+        # The execution ledger also refuses a dotted spelling such as "t.b.d."
+        # and any character that splits a line, such as U+2028.
+        if standing.lower() in ADMISSION_PLACEHOLDER_VALUES:
+            raise AuthoringError(
+                "standing_continuation_authorization must not be a placeholder value"
+            )
+        if standing.splitlines() != [standing]:
+            raise AuthoringError(
+                "standing_continuation_authorization must stay on one line"
+            )
+        document["standing_continuation_authorization"] = standing
     if profile == PROFILE_ROOT:
         document["primary_invariant"] = bounded_text(
             data["primary_invariant"], "primary_invariant", MAX_TEXT_BYTES
@@ -1091,6 +1112,7 @@ def render_root_plan(document: dict[str, Any]) -> str:
     for key in ("implementation_risk", "implementation_ambiguity"):
         if key in document:
             lines.append(f"{key}: {document[key]}")
+    lines.extend(standing_authorization_line(document))
     lines.append(f"plan_purpose: {document['plan_purpose']}")
     lines.extend(
         manifest_list(
@@ -1141,6 +1163,7 @@ def render_generated_plan(document: dict[str, Any]) -> str:
     lines.append(f"review_class: {document['review_class']}")
     lines.append(f"human_design_required: {document['human_design_required']}")
     lines.append(f"human_approval_status: {document['human_approval_status']}")
+    lines.extend(standing_authorization_line(document))
     lines.append(f"plan_purpose: {document['plan_purpose']}")
     lines.extend(manifest_list("write_scope", document["write_scope"]))
     lines.extend(manifest_list("focused_validation", document["focused_validation"]))
@@ -1189,6 +1212,12 @@ def render_generated_plan(document: dict[str, Any]) -> str:
     lines.extend(f"- {note}" for note in document["validation_notes"])
     lines.append("")
     return "\n".join(lines)
+
+
+def standing_authorization_line(document: dict[str, Any]) -> list[str]:
+    if "standing_continuation_authorization" not in document:
+        return []
+    return [f"standing_continuation_authorization: {document['standing_continuation_authorization']}"]
 
 
 def bullet_section(heading: str, items: list[str]) -> list[str]:

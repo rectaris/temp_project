@@ -328,6 +328,79 @@ class PlanAuthoringTest(unittest.TestCase):
                     for line in rendered.splitlines():
                         self.assertEqual(line, line.rstrip(), line)
 
+    def test_standing_authorization_renders_one_line_that_the_ledger_reads(self):
+        words = "4回目のレビューまで、この計画の続行を承認する。"
+        ledger = load_module(ROOT / "scripts/plan-execution-state.py", "ledger_for_plan_authoring")
+        planlib = load_module(PLANLIB, "planlib_for_standing_authoring")
+        module = self.module()
+        self.assertEqual(
+            set(module.ADMISSION_PLACEHOLDER_VALUES), set(ledger.STANDING_PLACEHOLDER_VALUES)
+        )
+        for profile in ("root", "generated"):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as tmp:
+                root = self.make_repository(Path(tmp))
+                document = json.loads(json.dumps(self.accepted_case(profile)))
+                document["standing_continuation_authorization"] = words
+                source = self.write_input(root, document)
+                if profile == "root":
+                    checked = self.run_command(root, "check", "--input", str(source), "--print-digest")
+                    self.assertEqual(checked.returncode, 0, checked.stderr)
+                    written = self.run_command(
+                        root, "write", "--input", str(source),
+                        "--expect-input-sha256", checked.stdout.strip(),
+                    )
+                    self.assertEqual(written.returncode, 0, written.stderr)
+                    path = written.stdout.strip()
+                else:
+                    digest, _ = module.check_authoring_input(root, source, profile=profile)
+                    path = module.write_authoring_input(root, source, digest, profile=profile)
+                rendered = (root / path).read_text(encoding="utf-8")
+                self.assertEqual(
+                    [line for line in rendered.splitlines()
+                     if line.startswith("standing_continuation_authorization")],
+                    [f"standing_continuation_authorization: {words}"],
+                )
+                self.assertEqual(ledger.plan_standing_quotation(rendered), words)
+                self.assertEqual(
+                    planlib.parse_manifest_text(rendered)["standing_continuation_authorization"], words
+                )
+                del document["standing_continuation_authorization"]
+                absent = self.write_input(root, document, "absent.json")
+                module.check_authoring_input(root, absent, profile=profile)
+                self.assertNotIn(
+                    "standing_continuation_authorization",
+                    module.render_plan(
+                        module.build_document(
+                            module.parse_input(absent.read_bytes()), profile=profile
+                        ),
+                        "002",
+                    ),
+                )
+
+    def test_standing_authorization_refuses_unbounded_values(self):
+        module = self.module()
+        for profile in ("root", "generated"):
+            for value, message in (
+                ("", "must not be empty"),
+                ("TODO", "placeholder"),
+                ("t.b.d.", "placeholder"),
+                ("Pending", "placeholder"),
+                ("first line\u2028second line", "one line"),
+                ("first line\nsecond line", "control character"),
+                ("x" * 401, "at most 400 bytes"),
+                (" padded words", "leading or trailing whitespace"),
+                (["list"], "must be text"),
+            ):
+                with self.subTest(profile=profile, value=value), tempfile.TemporaryDirectory() as tmp:
+                    root = self.make_repository(Path(tmp))
+                    document = json.loads(json.dumps(self.accepted_case(profile)))
+                    document["standing_continuation_authorization"] = value
+                    source = self.write_input(root, document)
+                    with self.assertRaises(module.AuthoringError) as caught:
+                        module.check_authoring_input(root, source, profile=profile)
+                    self.assertIn(message, str(caught.exception))
+                    self.assertEqual(list((root / "docs/plan/active").iterdir()), [])
+
 
 class PlanAuthoringInRepositoryTest(unittest.TestCase):
     """Authoring inside a real repository, where the shared lifecycle lock applies."""

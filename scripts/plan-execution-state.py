@@ -4728,13 +4728,126 @@ def standing_paths(paths: list[Path]) -> None:
         raise StateError("standing authorization paths alias an input or lock")
 
 
+# The same placeholder vocabulary plan authoring, planlib admission and the
+# root checker refuse, so no path admits a placeholder as the owner's words.
+STANDING_PLACEHOLDER_VALUES = frozenset({
+    "-", "?", "n/a", "na", "none", "pending", "placeholder",
+    "t.b.d.", "tbd", "todo", "unknown", "xxx",
+})
+
+
 def bounded_owner_quotation(value: Any) -> None:
+    normalized = value.strip().lower() if isinstance(value, str) else ""
     if (
-        not isinstance(value, str) or not value.strip()
+        not normalized
         or len(value.encode("utf-8")) > 400
-        or value.strip().lower() in {"todo", "tbd", "placeholder", "none"}
+        or normalized in STANDING_PLACEHOLDER_VALUES
+        or normalized.strip(" .") in STANDING_PLACEHOLDER_VALUES
     ):
         raise StateError("standing owner authorization is not bounded")
+
+
+STANDING_PLAN_FIELD = "standing_continuation_authorization"
+
+
+def plan_standing_quotation(plan_text: str) -> str | None:
+    """Return the owner's verbatim words a plan records as its standing authorization.
+
+    Absence keeps the explicit --owner-authorization path. Keys are recognized
+    exactly as the restructuring and plan-library parsers recognize them: an
+    unindented line whose text before the first colon strips to the key, in
+    the leading manifest that ends at the first `## ` heading. The field is
+    then admitted only in its canonical spelling, once, and as one bounded
+    single-line value; a body occurrence, a noncanonical spelling, a
+    duplicate, or a blank, placeholder, padded, over-400-byte or not strictly
+    single-line value refuses rather than being normalized.
+    """
+    in_manifest = True
+    found: list[str] = []
+    for line in plan_text.splitlines(keepends=True):
+        bare = line.rstrip()
+        if bare.startswith("## "):
+            in_manifest = False
+        if bare.startswith(" ") or ":" not in bare:
+            continue
+        if bare.split(":", 1)[0].strip() != STANDING_PLAN_FIELD:
+            continue
+        if not in_manifest:
+            raise StateError(
+                f"plan declares {STANDING_PLAN_FIELD} outside its leading manifest"
+            )
+        if not line.startswith(STANDING_PLAN_FIELD + ":"):
+            raise StateError(f"plan spells {STANDING_PLAN_FIELD} noncanonically")
+        found.append(line)
+    if not found:
+        return None
+    if len(found) != 1:
+        raise StateError(f"plan declares {STANDING_PLAN_FIELD} more than once")
+    line = found[0][:-1] if found[0].endswith("\n") else found[0]
+    raw = line[len(STANDING_PLAN_FIELD) + 1:]
+    value = raw[1:] if raw.startswith(" ") else ""
+    if (
+        value != value.strip()
+        or (value and value.splitlines() != [value])
+        or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+    ):
+        raise StateError(f"plan {STANDING_PLAN_FIELD} is not one bounded single-line value")
+    bounded_owner_quotation(value)
+    return value
+
+
+def execution_plan_standing(state: dict[str, Any]) -> str | None:
+    """Return the standing words of the exact committed plan the ledger binds.
+
+    Only the source-head blob whose digest is the ledger plan digest may supply
+    the quotation. A ledger bound to other plan bytes keeps the explicit path
+    only while neither those bytes nor the source-head blob declares the field,
+    so neither an uncommitted addition nor an uncommitted deletion counts.
+    """
+    root = repository_root()
+    committed = subprocess.run(
+        ["git", "cat-file", "blob", f"{state['source_head']}:{state['plan_path']}"],
+        check=False, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=sanitized_git_environment(),
+    )
+    committed_bytes = committed.stdout if committed.returncode == 0 else None
+    try:
+        if committed_bytes is not None and digest(committed_bytes) == state["plan_digest"]:
+            return plan_standing_quotation(committed_bytes.decode("utf-8"))
+        plan = root / state["plan_path"]
+        reject_symlink_ancestors(plan, include_target=True)
+        try:
+            working = plan.read_bytes()
+        except OSError as exc:
+            raise StateError("execution plan is unavailable") from exc
+        if digest(working) != state["plan_digest"]:
+            raise StateError("execution plan bytes matching the ledger plan digest are unavailable")
+        declarations = [plan_standing_quotation(working.decode("utf-8"))]
+        if committed_bytes is not None:
+            declarations.append(plan_standing_quotation(committed_bytes.decode("utf-8")))
+    except UnicodeDecodeError as exc:
+        raise StateError("execution plan must be UTF-8") from exc
+    if any(declaration is not None for declaration in declarations):
+        raise StateError(
+            f"plan {STANDING_PLAN_FIELD} must be committed at the ledger source head "
+            "and bound by the ledger plan digest"
+        )
+    return None
+
+
+def require_plan_standing_registration(state: dict[str, Any]) -> None:
+    """Refuse an epoch-zero review before a plan-declared standing record exists."""
+    epoch = execution_epoch(state)
+    if epoch is None or epoch["epoch"] != 0 or any(
+        event["event_type"] == "standing_authorization_recorded"
+        for event in state["events"]
+    ):
+        return
+    if execution_plan_standing(state) is not None:
+        raise StateError(
+            f"the plan declares {STANDING_PLAN_FIELD}; register it with "
+            "standing-authorization before the first formal review"
+        )
 
 
 def register_standing_authorization(args: argparse.Namespace) -> None:
@@ -4754,7 +4867,21 @@ def register_standing_authorization(args: argparse.Namespace) -> None:
         ):
             raise StateError("standing authorization requires the exact unreviewed epoch-zero run")
         require_repository_baseline(state)
-        bounded_owner_quotation(args.owner_authorization)
+        declared = execution_plan_standing(state)
+        if declared is None:
+            if args.owner_authorization is None:
+                raise StateError(
+                    f"the plan declares no {STANDING_PLAN_FIELD}; "
+                    "supply --owner-authorization"
+                )
+            quotation = args.owner_authorization
+        elif args.owner_authorization not in (None, declared):
+            raise StateError(
+                f"--owner-authorization differs from the plan's {STANDING_PLAN_FIELD}"
+            )
+        else:
+            quotation = declared
+        bounded_owner_quotation(quotation)
         if output.exists():
             raise StateError("standing authorization output already exists")
         with with_lock(registry_path) as registry_lock:
@@ -4765,7 +4892,7 @@ def register_standing_authorization(args: argparse.Namespace) -> None:
             record = {
                 "schema_version": 1, "record_type": "standing_continuation_authorization",
                 **{key: state[key] for key in STANDING_BINDINGS},
-                "owner_authorization": args.owner_authorization,
+                "owner_authorization": quotation,
                 "epoch_zero_genesis_digest": state["genesis_digest"],
                 "epoch_zero_state_path_digest": continuation_state_path_digest(path),
                 "continuation_registry_identity_digest": registry["identity_digest"],
@@ -6643,6 +6770,10 @@ def record_event(args: argparse.Namespace) -> None:
             raise StateError("invalid event_id")
         if len(state["events"]) >= MAX_EVENTS:
             raise StateError("event budget exhausted")
+        if args.event_type == "parent_review":
+            # Before any receipt, registry or ledger effect: a plan that records
+            # the owner's standing words must bind them before it spends a review.
+            require_plan_standing_registration(state)
         if (
             args.event_type == "parent_review"
             and args.implementation_mode == "parent_direct"
@@ -7775,7 +7906,7 @@ def parser() -> argparse.ArgumentParser:
     standing.add_argument("--run-id", required=True)
     standing.add_argument("--plan", required=True)
     standing.add_argument("--continuation-registry", required=True)
-    standing.add_argument("--owner-authorization", required=True)
+    standing.add_argument("--owner-authorization")
     standing.add_argument("--output", required=True)
     standing.set_defaults(handler=register_standing_authorization)
     for command, handler in (

@@ -221,6 +221,7 @@ REBIND_PROTECTED_FIELDS = {
     "required_specs",
     "implementation_risk",
     "implementation_ambiguity",
+    "standing_continuation_authorization",
     "review_class",
     "human_design_required",
     "human_approval_status",

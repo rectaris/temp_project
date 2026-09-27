@@ -2840,6 +2840,35 @@ def require_context_compression_boundary() -> None:
             fail(f"generated context compression is missing normative path refusal: {marker}")
 
 
+def require_plan_standing_authorization_alignment() -> None:
+    """Keep the plan-recorded standing authorization rule and field in generated projects."""
+
+    for relative in (
+        "template/.project-agent-workflow/AGENTS.md.jinja",
+        "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
+        "template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md",
+        "template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md",
+    ):
+        text = read(relative)
+        for marker in ("`standing_continuation_authorization`", "verbatim words", "infer"):
+            if marker not in text:
+                fail(f"{relative} missing plan-recorded standing authorization rule: {marker}")
+    for relative, marker in (
+        ("template/.project-agent-workflow/scripts/plan-execution-state.py",
+         'STANDING_PLAN_FIELD = "standing_continuation_authorization"'),
+        ("template/.project-agent-workflow/scripts/plan-execution-state.py",
+         "require_plan_standing_registration(state)"),
+        ("template/.project-agent-workflow/scripts/plan_authoring.py",
+         '"standing_continuation_authorization",'),
+        ("template/.project-agent-workflow/scripts/restructure-plan.py",
+         '"standing_continuation_authorization",'),
+        ("template/.project-agent-workflow/scripts/planlib.py",
+         '"standing_continuation_authorization",'),
+    ):
+        if marker not in read(relative):
+            fail(f"{relative} missing plan-recorded standing authorization support: {marker}")
+
+
 def require_review_turn_zero_contract() -> None:
     required = {
         "template/.project-agent-workflow/docs/agent/SPEC_AGENT_LOGGING.md": (
@@ -3990,6 +4019,7 @@ def main() -> int:
     require_orca_coordinator_alignment()
     require_hook_logging_parity()
     require_root_pre_tool_hardening()
+    require_plan_standing_authorization_alignment()
     require_orchestration_policy_markers()
     require_shared_human_report_boundary()
     require_completion_gate_distribution()

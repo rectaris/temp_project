@@ -1030,6 +1030,57 @@ class PlanRestructureTest(unittest.TestCase):
                 self.assertNotIn("reserved_by", live)
                 self.assertEqual(self.run_verify().returncode, 0)
 
+    def test_rebind_and_activation_cannot_touch_standing_authorization(self) -> None:
+        module = self.load_restructure_module("standing_rebind_module")
+        words = "4回目のレビューまで、この計画の続行を承認する。"
+        base = "status: in_progress\nprimary_invariant: keep the words\n"
+        declared = base + f"standing_continuation_authorization: {words}\n"
+        identities = [
+            module.manifest_identity_values(module.parse_manifest(text))
+            for text in (
+                base, declared,
+                base + "standing_continuation_authorization: another quotation\n",
+            )
+        ]
+        self.assertEqual(len({json.dumps(value, sort_keys=True) for value in identities}), 3)
+
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, "coupled-standing-forge.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked_path = self.check_successor(successor_path)
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_path,
+            promoted_path=None,
+        )
+        record = activation["rebindings"][0]  # type: ignore[index]
+        original = (self.repo / target_path).read_text(encoding="utf-8")
+        forged = f"standing_continuation_authorization: {words}\n"
+        reason = ""
+        for replacement in record["replacements"]:
+            if replacement["field"] == "completion_deferred_reason":
+                reason = str(replacement["old"])
+                replacement["new"] = forged
+                break
+        self.assertTrue(reason)
+        record["updated_content_digest"] = digest(
+            original.replace("status: deferred\n", "status: in_progress\n", 1)
+            .replace(reason, forged, 1)
+            .replace(successor_path, checked_path, 1)
+        )
+        forged_result = self.run_spec_data(activation, "activation-forge-standing.json")
+        self.assertNotEqual(forged_result.returncode, 0, forged_result.stdout)
+        self.assertIn("activation changes protected plan identity", forged_result.stderr)
+        live = (self.repo / target_path).read_text(encoding="utf-8")
+        self.assertEqual(live, original)
+        self.assertNotIn("standing_continuation_authorization", live)
+        self.assertEqual(self.run_verify().returncode, 0)
+
     def test_repository_active_predecessors_reject_cross_id_index_rows(self) -> None:
         active_index = self.repo / "docs/plan/plan.md"
         active_index.write_text(

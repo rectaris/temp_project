@@ -43,6 +43,7 @@ def load_state_module():
 
 
 STATE_MODULE = load_state_module()
+PLAN_STANDING_WORDS = "4回目のレビューまで、この計画の続行を承認する。"
 
 
 def digest(value: str | bytes) -> str:
@@ -1806,7 +1807,25 @@ class PlanExecutionStateTest(unittest.TestCase):
             *(["--finding-severity", "Medium"] if medium else []), check=check,
         )
 
-    def standing_fixture(self, label: str = "standing") -> dict:
+    def declare_plan_standing(self, line: str, plan: Path | None = None) -> None:
+        """Commit the plan with one raw standing_continuation_authorization line."""
+        selected = plan or self.plan
+        text = selected.read_text(encoding="utf-8")
+        selected.write_text(
+            text.replace("primary_invariant: ", line + "primary_invariant: ", 1),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "record standing words"], cwd=self.repo, check=True)
+        self.head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True,
+        ).strip()
+
+    def standing_fixture(self, label: str = "standing", *, plan_sourced: bool = False) -> dict:
+        if plan_sourced:
+            self.declare_plan_standing(
+                f"standing_continuation_authorization: {PLAN_STANDING_WORDS}\n"
+            )
         origin, lifecycle, run_id = self.initialize_execution(
             label, mode="parent_direct", require_preflight=True,
         )
@@ -1815,7 +1834,9 @@ class PlanExecutionStateTest(unittest.TestCase):
             "standing-authorization", str(origin), "--run-id", run_id,
             "--plan", self.plan.relative_to(self.repo).as_posix(),
             "--continuation-registry", str(self.continuation_registry),
-            "--owner-authorization", "Continue this exact plan through the fourth review.",
+            *(() if plan_sourced else (
+                "--owner-authorization", "Continue this exact plan through the fourth review.",
+            )),
             "--output", str(standing),
         ]
         self.run_cli(*registration, check=True)
@@ -2037,7 +2058,9 @@ class PlanExecutionStateTest(unittest.TestCase):
         for option, value in (
             ("--plan", self.child_plan.relative_to(self.repo).as_posix()),
             ("--run-id", "another-execution"),
-            ("--owner-authorization", "TODO"),
+            *(("--owner-authorization", value) for value in (
+                "TODO", "pending", "unknown", "xxx", "TBD.", "t.b.d.", "-", "?", "N/A",
+            )),
             ("--owner-authorization", "x" * 401),
             ("--output", str(self.repo / "standing.json")),
             ("--output", str(self.base / ".." / self.base.name / "repo" / "standing.json")),
@@ -2179,6 +2202,228 @@ class PlanExecutionStateTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertNotEqual(STATE_MODULE.read_state(state)["state"], "accepted")
+
+    def test_plan_standing_words_become_the_standing_quotation(self) -> None:
+        fixture = self.standing_fixture("plan-standing", plan_sourced=True)
+        record = json.loads(fixture["standing"].read_text(encoding="utf-8"))
+        self.assertEqual(record["owner_authorization"], PLAN_STANDING_WORDS)
+        self.assertEqual(set(record), STATE_MODULE.STANDING_KEYS)
+        plan = self.plan.relative_to(self.repo).as_posix()
+        for label, quotation, accepted in (
+            ("plan-standing-same", PLAN_STANDING_WORDS, True),
+            ("plan-standing-other", "Continue through the fourth review.", False),
+        ):
+            with self.subTest(quotation=quotation):
+                state, _, run_id = self.initialize_execution(
+                    label, mode="parent_direct", require_preflight=True,
+                )
+                output = self.base / f"{label}.json"
+                before = state.read_bytes()
+                result = self.run_cli(
+                    "standing-authorization", str(state), "--run-id", run_id, "--plan", plan,
+                    "--continuation-registry", str(self.continuation_registry),
+                    "--owner-authorization", quotation, "--output", str(output),
+                )
+                if accepted:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        json.loads(output.read_text())["owner_authorization"], PLAN_STANDING_WORDS,
+                    )
+                    continue
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("differs from the plan's", result.stderr)
+                self.assertEqual(state.read_bytes(), before)
+                self.assertFalse(output.exists())
+
+    def test_malformed_plan_standing_words_and_absent_quotation_refuse(self) -> None:
+        plan = self.plan.relative_to(self.repo).as_posix()
+        original = self.plan.read_text(encoding="utf-8")
+        line = "standing_continuation_authorization:"
+        cases = [
+            ("absent", "", None),
+            ("blank", f"{line}\n", "not bounded"),
+            ("space-only", f"{line} \n", "not bounded"),
+            *(
+                (f"placeholder-{index}", f"{line} {value}\n", "not bounded")
+                for index, value in enumerate(
+                    ("TODO", "pending", "unknown", "xxx", "TBD.", "t.b.d.", "-", "?", "N/A")
+                )
+            ),
+            ("oversized", f"{line} {'x' * 401}\n", "not bounded"),
+            ("padded", f"{line}  {PLAN_STANDING_WORDS}\n", "single-line"),
+            ("unseparated", f"{line}{PLAN_STANDING_WORDS}\n", "not bounded"),
+            ("duplicated", f"{line} {PLAN_STANDING_WORDS}\n" * 2, "more than once"),
+            ("line-separator", f"{line} {PLAN_STANDING_WORDS}\u2028tail\n", "single-line"),
+            ("spaced-colon", f"standing_continuation_authorization : {PLAN_STANDING_WORDS}\n", "noncanonically"),
+            ("tab-indented", f"\t{line} {PLAN_STANDING_WORDS}\n", "noncanonically"),
+            ("spelled-twice", f"{line} {PLAN_STANDING_WORDS}\nstanding_continuation_authorization\t: {PLAN_STANDING_WORDS}\n", "noncanonically"),
+            ("body-spaced", f"## Notes\n\nstanding_continuation_authorization : {PLAN_STANDING_WORDS}\n", "outside its leading manifest"),
+            ("body-line", f"## Notes\n\n{line} {PLAN_STANDING_WORDS}\n", "outside its leading manifest"),
+        ]
+        for label, declaration, message in cases:
+            with self.subTest(case=label):
+                self.plan.write_text(original, encoding="utf-8")
+                if declaration.startswith("## "):
+                    self.plan.write_text(original + "\n" + declaration, encoding="utf-8")
+                    self.declare_plan_standing("")
+                elif declaration:
+                    self.declare_plan_standing(declaration)
+                state, _, run_id = self.initialize_execution(
+                    f"malformed-{label}", mode="parent_direct", require_preflight=True,
+                )
+                output = self.base / f"malformed-{label}.json"
+                before = state.read_bytes()
+                quotations = [None, PLAN_STANDING_WORDS] if declaration else [None]
+                for quotation in quotations:
+                    result = self.run_cli(
+                        "standing-authorization", str(state), "--run-id", run_id,
+                        "--plan", plan, "--continuation-registry", str(self.continuation_registry),
+                        *(() if quotation is None else ("--owner-authorization", quotation)),
+                        "--output", str(output),
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(message or "supply --owner-authorization", result.stderr)
+                    self.assertEqual(state.read_bytes(), before)
+                    self.assertFalse(output.exists())
+
+    def test_uncommitted_plan_standing_changes_grant_nothing(self) -> None:
+        original = self.plan.read_text(encoding="utf-8")
+        declared = original.replace(
+            "primary_invariant: ",
+            f"standing_continuation_authorization: {PLAN_STANDING_WORDS}\nprimary_invariant: ",
+            1,
+        )
+        for change in ("added", "deleted"):
+            with self.subTest(change=change):
+                if change == "deleted":
+                    self.plan.write_text(declared, encoding="utf-8")
+                    self.declare_plan_standing("")
+                    self.plan.write_text(original, encoding="utf-8")
+                else:
+                    self.plan.write_text(declared, encoding="utf-8")
+                state, lifecycle, run_id = self.initialize_execution(
+                    f"uncommitted-{change}", mode="parent_direct", require_preflight=True,
+                )
+                output = self.base / f"uncommitted-{change}.json"
+                before = state.read_bytes()
+                for quotation in (None, PLAN_STANDING_WORDS, "Continue through the fourth review."):
+                    result = self.run_cli(
+                        "standing-authorization", str(state), "--run-id", run_id,
+                        "--plan", self.plan.relative_to(self.repo).as_posix(),
+                        "--continuation-registry", str(self.continuation_registry),
+                        *(() if quotation is None else ("--owner-authorization", quotation)),
+                        "--output", str(output),
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("must be committed at the ledger source head", result.stderr)
+                    self.assertEqual(state.read_bytes(), before)
+                    self.assertFalse(output.exists())
+                (self.repo / "allowed.txt").write_text(f"uncommitted {change} candidate\n")
+                registry = self.registry.read_bytes()
+                refused = self.staged_parent_review_fixture(
+                    state, lifecycle, f"uncommitted-{change}-review", check=False,
+                )
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("must be committed at the ledger source head", refused.stderr)
+                self.assertEqual(self.registry.read_bytes(), registry)
+                self.assertEqual(STATE_MODULE.formal_review_count(STATE_MODULE.read_state(state)), 0)
+
+    def test_plan_standing_words_gate_the_first_formal_review(self) -> None:
+        self.declare_plan_standing(f"standing_continuation_authorization: {PLAN_STANDING_WORDS}\n")
+        state, lifecycle, run_id = self.initialize_execution(
+            "plan-standing-gate", mode="parent_direct", require_preflight=True,
+        )
+        (self.repo / "allowed.txt").write_text("gated review candidate\n")
+        registry = self.registry.read_bytes()
+        refused = self.staged_parent_review_fixture(
+            state, lifecycle, "plan-standing-gated", check=False,
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("before the first formal review", refused.stderr)
+        self.assertEqual(self.registry.read_bytes(), registry)
+        self.assertEqual(STATE_MODULE.formal_review_count(STATE_MODULE.read_state(state)), 0)
+        before = state.read_bytes()
+        plain = self.run_cli(
+            "record", str(state), "--run-id", run_id, "--event-id", "plain-gated",
+            "--event-type", "parent_review", "--implementation-mode", "parent_direct",
+            "--invariant-digest", STATE_MODULE.read_state(state)["primary_invariant_digest"],
+            "--candidate-lifecycle-digest", digest("plain review identity"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(plain.returncode, 0)
+        self.assertIn("before the first formal review", plain.stderr)
+        self.assertEqual(state.read_bytes(), before)
+        self.run_cli(
+            "standing-authorization", str(state), "--run-id", run_id,
+            "--plan", self.plan.relative_to(self.repo).as_posix(),
+            "--continuation-registry", str(self.continuation_registry),
+            "--output", str(self.base / "plan-standing-gate.json"), check=True,
+        )
+        self.staged_parent_review_fixture(state, lifecycle, "plan-standing-admitted", check=True)
+        self.assertEqual(STATE_MODULE.formal_review_count(STATE_MODULE.read_state(state)), 1)
+        unmarked, unmarked_lifecycle, _ = self.initialize_execution(
+            "plan-standing-absent", plan=self.child_plan, mode="parent_direct",
+            require_preflight=True,
+        )
+        self.staged_parent_review_fixture(
+            unmarked, unmarked_lifecycle, "plan-standing-absent-review", check=True,
+        )
+        self.assertEqual(STATE_MODULE.formal_review_count(STATE_MODULE.read_state(unmarked)), 1)
+
+    def test_plan_sourced_standing_derives_like_an_explicit_record(self) -> None:
+        fixture = self.standing_fixture("plan-chain", plan_sourced=True)
+        predecessor, lifecycle = fixture["origin"], fixture["lifecycle"]
+        ledgers = [predecessor]
+        for epoch in (1, 2, 3):
+            self.staged_parent_review_fixture(
+                predecessor, lifecycle, f"plan-chain-review-{epoch}", medium=True,
+            )
+            arguments = self.standing_arguments(
+                fixture, predecessor, epoch, ledgers[1] if epoch == 3 else None,
+            )
+            self.run_cli(*arguments, check=True)
+            authorization = json.loads(
+                Path(arguments[arguments.index("--authorization") + 1]).read_text()
+            )
+            self.assertEqual(authorization["schema_version"], epoch)
+            self.assertEqual(authorization["owner_authorization"], PLAN_STANDING_WORDS)
+            self.run_cli("verify-authorization", *arguments[1:], check=True)
+            predecessor = self.continue_standing(arguments, epoch)
+            ledgers.append(predecessor)
+            lifecycle = Path(arguments[arguments.index("--lifecycle-state") + 1])
+        self.staged_parent_review_fixture(predecessor, lifecycle, "plan-chain-review-4", medium=True)
+        extra = self.standing_arguments(fixture, predecessor, 4, ledgers[1])
+        self.assertNotEqual(self.run_cli(*extra).returncode, 0)
+        evidence = self.owner_resolution_evidence_fixture(predecessor, "plan-chain-resolution")
+        child = self.base / "plan-chain-resolution.json"
+        fresh = self.continuation_authorization_fixture(
+            predecessor, child, "plan-chain-resolution", final=True, resolution=True,
+            source_head=self.head, finding_evidence_digest=digest(evidence.read_bytes()),
+        )
+        resolution = [
+            "resolve-owner", str(child), "--predecessor-state", str(predecessor),
+            "--epoch-zero-state", str(ledgers[0]), "--epoch-one-state", str(ledgers[1]),
+            "--epoch-two-state", str(ledgers[2]), "--finding-evidence", str(evidence),
+            "--continuation-registry", str(self.continuation_registry),
+            "--reviewer-registry", str(self.registry),
+            "--authorization", str(fixture["standing"]), "--source-head", self.head,
+            "--run-id", "plan-chain-resolution",
+            "--plan", self.plan.relative_to(self.repo).as_posix(),
+            "--lifecycle-state", str(self.base / "plan-chain-resolution-lifecycle.json"),
+            "--implementation-mode", "parent_direct",
+        ]
+        before = self.continuation_registry.read_bytes()
+        self.assertNotEqual(self.run_cli(*resolution).returncode, 0)
+        self.assertEqual(self.continuation_registry.read_bytes(), before)
+        self.assertFalse(child.exists())
+        resolution[resolution.index("--authorization") + 1] = str(fresh)
+        self.run_cli(*resolution, check=True)
+        accepted = self.run_cli(
+            "owner-accept", str(child), "--run-id", "plan-chain-resolution",
+            "--event-id", "plan-standing-owner-accept", "--acceptance", str(fixture["standing"]),
+        )
+        self.assertNotEqual(accepted.returncode, 0)
+        self.assertNotEqual(STATE_MODULE.read_state(child)["state"], "accepted")
 
     def continuation_authorization_fixture(
         self, state: Path, child: Path, run_id: str, *,
