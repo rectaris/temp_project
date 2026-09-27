@@ -295,3 +295,4 @@ id	path
 400	docs/plan/checked/2026/09/16-31/400-register-typesafe-with-canonical-host-detection.md
 354	docs/plan/checked/2026/09/16-31/354-score-plan-risk-from-weighted-features.md
 410	docs/plan/checked/2026/09/16-31/410-resolve-codex-runner-through-capability-registry.md
+419	docs/plan/checked/2026/09/16-31/419-keep-one-plan-id-reservation-per-authoring-target.md

@@ -1,6 +1,6 @@
 # Keep one plan-id reservation per authoring target so rechecking a revised input never skips identifiers
 
-status: in_progress
+status: checked
 primary_invariant: A task worktree holds at most one unwritten plan-id reservation per target lifecycle and slug, rechecking a revised input for that target keeps its identifier, and publishing the worktree leaves none of its unwritten reservations behind.
 task_types:
   - task_worktrees
@@ -76,12 +76,22 @@ checked_summary_ja: 作成するプランの行き先ごとに予約を一つに
 
 ## Tasks
 
-- [ ] Record the unchanged reservation test results before product edits.
-- [ ] Implement per-target reuse in reserve_plan_id and unwritten-reservation removal in publish and retire, in both copies.
-- [ ] Add cases for a revised recheck, distinct slugs, two worktrees, written entries, publication cleanup and identifier reuse after cleanup.
-- [ ] Describe the reservation lifecycle in both SPEC_PLAN_WORKFLOW.md copies.
-- [ ] Obtain independent review through a fresh read-only reviewer, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
+- [x] Record the unchanged reservation test results before product edits.
+- [x] Implement per-target reuse in reserve_plan_id and unwritten-reservation removal in publish and retire, in both copies.
+- [x] Add cases for a revised recheck, distinct slugs, two worktrees, written entries, publication cleanup and identifier reuse after cleanup.
+- [x] Describe the reservation lifecycle in both SPEC_PLAN_WORKFLOW.md copies.
+- [x] Obtain independent review through a fresh read-only reviewer, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
 
 ## Validation Notes
 
 - Owner instruction on 2026-09-26 asked to define these environment and workflow changes as rules and to create plans for them: create each task worktree's .venv with uv, let Bubblewrap run the .venv Python, replace the retired gpt-5.3-codex-spark with gpt-5.6-terra medium, fix the check-time plan-id reservations, and approve continuations up to the fourth review once at plan start (option A).
+- Reviewed implementation commit: `6b8b284`. The ten product paths are exactly the declared write scope; the three root/template code pairs remain byte-identical.
+- Baseline before product edits: `python3 tests/test-validation-tools.py PlanIdentifierReservationTest PlanAuthoringInRepositoryTest` passed 24 tests.
+- Regression coverage adds revised rechecks, stale-draft refusal without plan/index/ledger changes, distinct lifecycle/slug/worktree targets, written-entry preservation, publication cleanup, ordinary and stranded retirement, and reuse of freed identifiers. An initial test used the root validation fixture with the generated parser; selecting the existing generated fixture corrected that test setup.
+- Live disposable-repository CLI checks passed for both root and generated profiles: revised input wrote identifier 001, superseded input exited 1 without changing the index, another linked worktree received 003 while unused 002 remained reserved, and publication freed 002 for reuse and removed the exact task worktree and branch.
+- Focused validation passed: `python3 tests/test-validation-tools.py` (425 tests) and `python3 scripts/check-copier-template.py`.
+- Authoritative validation passed once each: `scripts/lint-project-workflow.sh` and `tests/smoke.sh`. The additional required `python3 tests/test-copier-fixture-validator.py` passed 563 tests. Validation used the task-local environment installed with `uv sync --locked`.
+- Independent review used one fresh read-only Codex reviewer requested as gpt-5.6-sol/high with an empty write scope and 24 observed tool calls. Its verdict was `REVIEW-VERDICT: none`; the parent verified the receipt, accepted the result, and recorded focused and authoritative success in external execution run `plan-419-20260927`.
+- The review-route probe required the existing runtime hooks: this Codex version's custom tool calls were not counted by transcript-only import. The successful hook-backed route supplied actual turn-zero and tool-call evidence; no admission rule was weakened. A local improvement draft preserves that observation with unresolved attribution and template revision.
+- After publication, local review evidence is under `.agent-logs/retired-tasks/419-keep-one-plan-id-reservation-per-authoring-target/plan-419-review-1/`; baseline, CLI, validation, and feedback evidence are under the corresponding `.agent-artifacts/retired-tasks/419-keep-one-plan-id-reservation-per-authoring-target/` directory.
+- No remaining review findings or deferred implementation work. No link changes or push.
