@@ -1,6 +1,6 @@
 # Create each new task worktree's .venv with uv sync --locked and run root validation through uv run --locked
 
-status: backlog
+status: in_progress
 primary_invariant: Every newly prepared task worktree of a project that ships pyproject.toml and uv.lock has its own .venv synced exactly to uv.lock before work starts, validation runs inside that environment, and a sync failure is reported instead of leaving an unprovisioned worktree silently in use.
 task_types:
   - task_worktrees
