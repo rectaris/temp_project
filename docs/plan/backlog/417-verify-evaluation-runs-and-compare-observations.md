@@ -49,7 +49,7 @@ context_files:
   - scripts/run-sandboxed-plan-worker.py
   - scripts/compare-harness-runs.py
   - docs/plan/replanned/2026/09/16-31/415-compare-named-run-configurations-by-changed-dimensions.md
-  - docs/plan/backlog/418-execute-evaluation-runs-in-isolated-codex-sandboxes.md
+  - docs/plan/active/418-execute-evaluation-runs-in-isolated-codex-sandboxes.md
 required_specs:
   - docs/agent/SPEC_HARNESS_EVALUATION.md
   - docs/agent/SPEC_SECURITY.md

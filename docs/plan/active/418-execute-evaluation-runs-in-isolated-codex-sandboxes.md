@@ -1,6 +1,6 @@
 # Execute each frozen evaluation run once in a fresh fixture repository under Bubblewrap with isolated Codex state and bounded evidence
 
-status: backlog
+status: in_progress
 primary_invariant: Every evaluation run starts from its frozen baseline in its own sandbox with fresh HOME, TMP, XDG and Codex state, receives only a staged auth.json copy and an allowlisted environment, is bounded by its case timeout, and leaves only its own bounded evidence, with no view of other runs or host state.
 task_types:
   - harness_evaluation
