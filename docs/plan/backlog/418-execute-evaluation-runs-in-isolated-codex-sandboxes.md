@@ -54,7 +54,7 @@ context_files:
   - scripts/run-sandboxed-plan-worker.py
   - template/.project-agent-workflow/scripts/agent_log_manifest.py
   - docs/plan/checked/2026/09/16-31/410-resolve-codex-runner-through-capability-registry.md
-  - docs/plan/backlog/416-freeze-evaluation-experiments-before-execution.md
+  - docs/plan/active/416-freeze-evaluation-experiments-before-execution.md
 required_specs:
   - docs/agent/SPEC_HARNESS_EVALUATION.md
   - docs/agent/SPEC_SECURITY.md

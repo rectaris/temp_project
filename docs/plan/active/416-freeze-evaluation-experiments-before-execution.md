@@ -1,6 +1,6 @@
 # Declare evaluation experiments, run configurations, environments and benchmark cases, and freeze their digests and run matrix before execution
 
-status: backlog
+status: in_progress
 primary_invariant: Resolving an experiment binds the digest of every case, run configuration, instruction asset, capability registry and environment it uses and fixes the complete run matrix before any run, without launching a model, using the network or writing outside its experiment directory.
 task_types:
   - harness_evaluation
