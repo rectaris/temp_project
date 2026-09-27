@@ -1,6 +1,6 @@
 # Let the sandboxed runner execute its Python helpers and Python workers when the runner itself runs from a uv-managed virtual environment
 
-status: in_progress
+status: checked
 primary_invariant: Whatever interpreter runs the sandboxed runner, every Python process it starts inside Bubblewrap receives that interpreter's real runtime read-only and nothing else beyond the existing mounts, so the runner behaves identically from the system Python and from a uv virtual environment.
 task_types:
   - template_workflow
@@ -78,13 +78,20 @@ checked_summary_ja: ランナーを uv の仮想環境の Python で動かして
 
 ## Tasks
 
-- [ ] Before product edits, prepare the parent-direct execution ledger with prepare-parent-direct, record the review-route check, and record the unchanged baseline results of the focused suites.
-- [ ] Resolve the helper interpreter and the custom worker interpreter and add the read-only runtime mounts in both runner copies.
-- [ ] Add cases for a venv-link runner, a venv-link custom worker, a system interpreter, an interpreter inside the clone and a runtime without bin and lib, and run the suite under both the system Python and uv run --locked.
-- [ ] Document the interpreter mounts in both orchestration guidance copies and CHANGELOG.md.
-- [ ] Record a passing adversarial preflight, obtain independent review through a fresh read-only Codex reviewer whose first prompt carries the ReviewPacket marker, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
+- [x] Before product edits, prepare the parent-direct execution ledger with prepare-parent-direct, record the review-route check, and record the unchanged baseline results of the focused suites.
+- [x] Resolve the helper interpreter and the custom worker interpreter and add the read-only runtime mounts in both runner copies.
+- [x] Add cases for a venv-link runner, a venv-link custom worker, a system interpreter, an interpreter inside the clone and a runtime without bin and lib, and run the suite under both the system Python and uv run --locked.
+- [x] Document the interpreter mounts in both orchestration guidance copies and CHANGELOG.md.
+- [x] Record a passing adversarial preflight, obtain independent review through a fresh read-only Codex reviewer whose first prompt carries the ReviewPacket marker, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
 
 ## Validation Notes
 
 - Owner instruction on 2026-09-26 asked to define these environment and workflow changes as rules and to create plans for them: create each task worktree's .venv with uv, let Bubblewrap run the .venv Python, replace the retired gpt-5.3-codex-spark with gpt-5.6-terra medium, fix the check-time plan-id reservations, and approve continuations up to the fourth review once at plan start (option A).
 - standing_continuation_authorization quotes the owner's words of 2026-09-27, given in the plan 421 conversation after it asked twice for continuation approval. The owner then chose to record that approval in the plan file (「2 の計画で作成する。」); plan 424 added the field here.
+- Parent-direct implementation was prepared against source `1fc0a44f30c326023864d3ce7b20fd490a516896` with `prepare-parent-direct`. `standing-authorization` took the owner's quotation from this plan's `standing_continuation_authorization` line before any review. A runtime-proven read-only route probe was recorded before product edits. No writable helper was used.
+- Baseline, run serially: `python3 tests/test-sandboxed-plan-worker.py` passed 268 tests under the system Python and failed 43 with 2 errors through `uv run --locked`, 41 of them with `bwrap: execvp .../.venv/bin/python3: No such file or directory`. `python3 scripts/check-copier-template.py` passed. A first attempt that ran both suites concurrently in one worktree also failed the live-evidence cases under the system Python; those cases pass when run alone, so the concurrent runs shared state and were discarded as baseline.
+- Final behavior: candidate patch collection launches `os.path.realpath(sys.executable)` with `-I` and mounts, read-only, only that interpreter's installation prefix, the parent of its `bin` directory holding `lib/pythonX.Y/os.py`, and nothing when the interpreter lies in the system directories. A custom worker whose executable is a venv interpreter link keeps its unresolved path and receives the venv root, admitted only when its `pyvenv.cfg` `home` names the resolved base interpreter's directory, and that base prefix, both read-only. Each root must be canonical and is refused before Bubblewrap starts when it equals or contains `HOME`, `CODEX_HOME`, the repository, the clone or the scratch, or lies inside the clone or scratch. The Codex worker, validation and non-venv custom workers keep the previous mounts, and validation still resolves through `DEFAULT_PATH`.
+- Formal review 1, in a fresh read-only Codex session whose first prompt carried the ReviewPacket marker, reported `REVIEW-VERDICT: none` after an exact-target adversarial preflight. No continuation was needed; one of the four cumulative reviews was used.
+- Regression proof: all six new cases fail against the source-baseline runner under both interpreters; the real venv custom-worker case fails behaviorally because the baseline resolves the venv link and loses the venv package. Throwaway adversarial cases passed 10 of 10 under both interpreters, including a symlink chain through the venv, a non-canonical venv alias, an oversized or versionless `pyvenv.cfg`, a standard-library landmark escaping its prefix, a read-only venv root and a hidden sibling path inside real Bubblewrap, and a HOME-containing prefix refused before Bubblewrap.
+- Focused validation passed: `python3 tests/test-sandboxed-plan-worker.py` ran 274 tests once through `uv run --locked` and once with the system `python3`, and `python3 scripts/check-copier-template.py` passed, which also proves both runner copies byte-identical. Authoritative `scripts/lint-project-workflow.sh` and `tests/smoke.sh` each ran once through `uv run --locked` after the clearing review and passed. The completion and archive execution gates passed before the implementation commit.
+- Accepted implementation commit: `6f63ee3`. The external ledger, standing authorization, receipts, review evidence and validation output are retained under `~/.local/state/project-agent-workflow/plan-423-20260927/`. Link changes: none.

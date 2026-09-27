@@ -300,3 +300,4 @@ id	path
 421	docs/plan/checked/2026/09/16-31/421-route-writable-work-to-terra-after-spark-retirement.md
 424	docs/plan/checked/2026/09/16-31/424-take-standing-authorization-from-the-plan-manifest.md
 422	docs/plan/checked/2026/09/16-31/422-provision-task-worktrees-with-the-locked-uv-environment.md
+423	docs/plan/checked/2026/09/16-31/423-run-sandboxed-python-helpers-from-a-reachable-interpreter.md
