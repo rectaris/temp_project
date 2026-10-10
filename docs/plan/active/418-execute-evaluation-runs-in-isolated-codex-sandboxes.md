@@ -1,6 +1,7 @@
 # Execute each frozen evaluation run once in a fresh fixture repository under Bubblewrap with isolated Codex state and bounded evidence
 
-status: in_progress
+status: deferred
+completion_deferred_reason: Owner-authorized scheduling hold while Issue18 planning and admission are prioritized; preserve this plan's scope, acceptance, historical evidence and execution budgets.
 primary_invariant: Every evaluation run starts from its frozen baseline in its own sandbox with fresh HOME, TMP, XDG and Codex state, receives only a staged auth.json copy and an allowlisted environment, is bounded by its case timeout, and leaves only its own bounded evidence, with no view of other runs or host state.
 task_types:
   - harness_evaluation
@@ -107,3 +108,5 @@ checked_summary_ja: 確定した評価の実行を、新しい fixture のリポ
 ## Validation Notes
 
 - Owner instruction on 2026-09-26, 「提案の方針で進める。」, fixed the root-only controller and the evidence location. Implement in a new conversation session from the published plan, per the owner's question about separate sessions.
+
+- Owner-authorized priority adjustment on 2026-10-10: preserve this plan and its historical ledgers while published Issue18 plan387 runs. The public baseline does not adopt the local-dev plan418 implementation or checked archive; this deferral changes scheduling only, not completion, acceptance, requirements or historical execution budgets. No current plan418 task binding, registered worktree or open writable attempt was found by the bounded read-only preflight; host-wide process visibility remains unknown.
