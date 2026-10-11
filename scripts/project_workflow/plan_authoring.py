@@ -572,6 +572,7 @@ def build_document(
         data["acceptance_items"],
         witnesses,
         allow_placeholder="acceptance_items" in placeholder_keys,
+        allow_unassigned=lifecycle == "backlog" and not legacy,
     )
     requirements = build_requirements(
         data["requirements"], write_paths, conditions, acceptance_items
@@ -621,7 +622,12 @@ def build_document(
     validation_witness_map = build_validation_witness_map(
         acceptance_ids, acceptance_items, witnesses, focused, validation
     )
-    if validation_witness_map and len(set(acceptance_texts)) != len(acceptance_texts):
+    unassigned = [
+        {"acceptance_sha256": text_digest(acceptance_items[item]["text"]),
+         "reason": acceptance_items[item]["unassigned_reason"]}
+        for item in acceptance_ids if "unassigned_reason" in acceptance_items[item]
+    ]
+    if (validation_witness_map or unassigned) and len(set(acceptance_texts)) != len(acceptance_texts):
         raise AuthoringError("acceptance items must be unique before witness mapping")
 
     document: dict[str, Any] = {
@@ -664,6 +670,8 @@ def build_document(
             data.get("validation_notes", []), "validation_notes", MAX_SECTION_ENTRIES, MAX_SECTION_BYTES
         ),
     }
+    if unassigned:
+        document["validation_witness_unassigned"] = unassigned
     if "standing_continuation_authorization" in data:
         standing = bounded_text(
             data["standing_continuation_authorization"],
@@ -888,6 +896,7 @@ def build_acceptance_items(
     witnesses: dict[str, dict[str, str]],
     *,
     allow_placeholder: bool,
+    allow_unassigned: bool = False,
 ) -> dict[str, dict[str, str]]:
     entries = bounded_list(value, "acceptance_items", MAX_ACCEPTANCE_ITEMS)
     items: dict[str, dict[str, str]] = {}
@@ -895,7 +904,7 @@ def build_acceptance_items(
     for index, item in enumerate(entries, start=1):
         label = f"acceptance_items entry {index}"
         record = exact_object(
-            item, label, {"id", "text"}, {"witness", "stage", "authoritative_only_reason"}
+            item, label, {"id", "text"}, {"witness", "stage", "authoritative_only_reason", "unassigned_reason"}
         )
         identifier = bounded_identifier(record["id"], f"{label} id")
         if identifier in items:
@@ -904,7 +913,20 @@ def build_acceptance_items(
             record["text"], f"{label} text", MAX_TEXT_BYTES, allow_placeholder=allow_placeholder
         )
         entry: dict[str, str] = {"id": identifier, "text": text, "witness": "", "stage": ""}
-        if "witness" in record or "stage" in record:
+        if "unassigned_reason" in record:
+            if not allow_unassigned:
+                raise AuthoringError(f"{label} unassigned verification requires unstarted backlog")
+            if any(key in record for key in ("witness", "stage", "authoritative_only_reason")):
+                raise AuthoringError(f"{label} conflicts with assigned verification")
+            entry["unassigned_reason"] = bounded_text(
+                record["unassigned_reason"], f"{label} unassigned_reason",
+                VALIDATION_WITNESS_REASON_MAX_BYTES,
+            )
+            reason = entry["unassigned_reason"]
+            if is_placeholder(reason.replace(".", "")) or reason.splitlines() != [reason]:
+                raise AuthoringError(f"{label} unassigned_reason must be a concrete single-line reason")
+            mapped.add(False)
+        elif "witness" in record or "stage" in record:
             witness = bounded_identifier(record.get("witness"), f"{label} witness")
             if witness not in witnesses:
                 raise AuthoringError(f"{label} names an undeclared witness: {witness!r}")
@@ -933,7 +955,7 @@ def build_acceptance_items(
                 raise AuthoringError(f"{label} declares a reason without a witness")
             mapped.add(False)
         items[identifier] = entry
-    if len(mapped) != 1:
+    if len(mapped) != 1 and not allow_unassigned:
         raise AuthoringError("acceptance_items must either all declare witnesses or none of them")
     return items
 
@@ -1025,7 +1047,7 @@ def build_validation_witness_map(
     for identifier in acceptance_ids:
         item = acceptance_items[identifier]
         if not item["stage"]:
-            return []
+            continue
         command = witnesses[item["witness"]]["command"]
         stage = item["stage"]
         record = {"acceptance_sha256": text_digest(item["text"]), "stage": stage, "witness": command}
@@ -1138,14 +1160,18 @@ def render_root_plan(document: dict[str, Any]) -> str:
     lines.extend(manifest_list("focused_validation", document["focused_validation"]))
     lines.extend(manifest_list("validation", document["validation"]))
     lines.extend(manifest_list("acceptance", document["acceptance"]))
-    if document["validation_witness_map"]:
+    if document["validation_witness_map"] or document.get("validation_witness_unassigned"):
         lines.append("validation_witness_schema: 1")
-        lines.extend(
-            manifest_list(
+        if document["validation_witness_map"]:
+            lines.extend(manifest_list(
                 "validation_witness_map",
                 [compact_json(record) for record in document["validation_witness_map"]],
-            )
-        )
+            ))
+        if document.get("validation_witness_unassigned"):
+            lines.extend(manifest_list(
+                "validation_witness_unassigned",
+                [compact_json(record) for record in document["validation_witness_unassigned"]],
+            ))
     if document["integration_gates"]:
         lines.extend(manifest_list("integration_gates", document["integration_gates"]))
     lines.append(f"checked_summary_ja: {document['summary_ja']}")
@@ -1190,14 +1216,18 @@ def render_generated_plan(document: dict[str, Any]) -> str:
     lines.extend(manifest_list("validation", document["validation"]))
     lines.extend(manifest_list("acceptance", document["acceptance"]))
     lines.extend(manifest_list("acceptance_focus", document["acceptance_focus"]))
-    if document["validation_witness_map"]:
+    if document["validation_witness_map"] or document.get("validation_witness_unassigned"):
         lines.append("validation_witness_schema: 1")
-        lines.extend(
-            manifest_list(
+        if document["validation_witness_map"]:
+            lines.extend(manifest_list(
                 "validation_witness_map",
                 [compact_json(record) for record in document["validation_witness_map"]],
-            )
-        )
+            ))
+        if document.get("validation_witness_unassigned"):
+            lines.extend(manifest_list(
+                "validation_witness_unassigned",
+                [compact_json(record) for record in document["validation_witness_unassigned"]],
+            ))
     if document["integration_gates"]:
         lines.extend(manifest_list("integration_gates", document["integration_gates"]))
     lines.append(f"checked_summary_ja: {document['summary_ja']}")

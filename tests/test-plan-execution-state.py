@@ -11167,6 +11167,60 @@ class ParentDirectPreparationTest(unittest.TestCase):
         )
         self.assertEqual(report["execution_genesis_digest"], state["genesis_digest"])
 
+    def test_unassigned_verification_refuses_before_records_or_group_claim(self) -> None:
+        record = json.dumps({"acceptance_sha256": digest("Test acceptance."),
+                             "reason": "Live integration verification is not designed."})
+        for declaration in (
+            f"validation_witness_unassigned:\n  - {record}\n",
+            f"validation_witness_unassigned: {record}\n",
+            f"validation_witness_unassigned:\n\n   - {record}\n",
+        ):
+            with self.subTest(declaration=declaration):
+                self.plan.write_text(self.PLAN_BODY + declaration, encoding="utf-8")
+                subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+                subprocess.run(["git", "commit", "-qm", "pending verification"],
+                               cwd=self.repo, check=True)
+                self.head = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+                ).strip()
+                group = self.external / "group-state.json"
+                group.write_text('{"one_use_claim":null}\n', encoding="utf-8")
+                before = {p.name: p.read_bytes() for p in self.external.iterdir()}
+                result = self.run_cli(*self.arguments())
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unassigned verification", result.stderr)
+                with mock.patch.object(STATE_MODULE, "claim_group_member_ledger") as claim, \
+                     mock.patch.object(STATE_MODULE, "initialize_reviewer_registry") as registry, \
+                     mock.patch.object(STATE_MODULE, "initialize_continuation_registry") as continuation, \
+                     mock.patch.object(STATE_MODULE, "init_state") as ledger:
+                    with self.assertRaisesRegex(STATE_MODULE.StateError, "unassigned verification"):
+                        self.prepare_in_process(group_state=str(group))
+                    for operation in (claim, registry, continuation, ledger):
+                        operation.assert_not_called()
+                self.assert_nothing_created()
+                self.assertFalse(self.lifecycle.exists())
+                self.assertEqual(
+                    {p.name: p.read_bytes() for p in self.external.iterdir()}, before
+                )
+
+    def test_assigned_verification_with_empty_pending_field_still_prepares(self) -> None:
+        assigned = json.dumps({"acceptance_sha256": digest("Test acceptance."),
+                               "stage": "focused", "witness": "true"})
+        self.plan.write_text(
+            self.PLAN_BODY + "validation_witness_schema: 1\n"
+            + f"validation_witness_map:\n  - {assigned}\n"
+            + "validation_witness_unassigned:\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "assigned verification"],
+                       cwd=self.repo, check=True)
+        self.head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        result = self.run_cli(*self.arguments())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads(result.stdout)["ready"])
+
     def test_preparation_grants_no_execution_authority(self) -> None:
         self.assertEqual(self.run_cli(*self.arguments()).returncode, 0)
         state = STATE_MODULE.read_state(self.state)

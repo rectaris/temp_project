@@ -401,6 +401,126 @@ class PlanAuthoringTest(unittest.TestCase):
                     self.assertIn(message, str(caught.exception))
                     self.assertEqual(list((root / "docs/plan/active").iterdir()), [])
 
+    def test_unassigned_backlog_roundtrip_and_mixed_coverage(self):
+        module = self.module()
+        planlib = load_module(PLANLIB, "planlib_unassigned_authoring")
+        for profile in ("root", "generated"):
+            data = self.accepted_case(profile)
+            data["lifecycle"] = "backlog"
+            texts = [item["text"] for item in data["acceptance_items"]]
+            for item in data["acceptance_items"]:
+                for key in ("witness", "stage", "authoritative_only_reason"):
+                    item.pop(key, None)
+                item["unassigned_reason"] = "Live approval acquisition has no complete verification method yet."
+            for mixed in (False, True):
+                with self.subTest(profile=profile, mixed=mixed):
+                    if mixed:
+                        item = dict(data["acceptance_items"][0])
+                        item["id"] = "another-acceptance"
+                        item["text"] = "Preserve the independently assigned fixture predicate."
+                        item.pop("unassigned_reason")
+                        item["witness"] = data["completion_conditions"][0]["witness"]
+                        item["stage"] = "focused"
+                        data["acceptance_items"].append(item)
+                        data["requirements"][0]["acceptance_items"].append(item["id"])
+                    document = module.build_document(data, profile=profile)
+                    rendered = module.render_plan(document, "991")
+                    values = planlib.parse_manifest_text(rendered)
+                    records = planlib.validate_validation_witness_map(values)
+                    self.assertEqual(len(records), int(mixed))
+                    self.assertEqual(document["acceptance"][:len(texts)], texts)
+                    self.assertEqual([r["acceptance_sha256"] for r in document["validation_witness_unassigned"]],
+                                     [module.text_digest(text) for text in texts])
+                    data["lifecycle"] = "active"
+                    with self.assertRaises(module.AuthoringError):
+                        module.build_document(data, profile=profile)
+                    data["lifecycle"] = "backlog"
+
+    def test_unassigned_authoring_rejects_missing_invalid_or_conflicting_reason(self):
+        module = self.module()
+        for profile in ("root", "generated"):
+            for reason in (None, "", " ", "TBD", "t.b.d.", "x" * 241, "語" * 81, "\ud800",
+                           *(f"reason{separator}continued" for separator in ("\n", "\r", "\r\n", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"))):
+                data = self.accepted_case(profile)
+                data["lifecycle"] = "backlog"
+                item = data["acceptance_items"][0]
+                for key in ("witness", "stage", "authoritative_only_reason"):
+                    item.pop(key, None)
+                if reason is not None:
+                    item["unassigned_reason"] = reason
+                with self.subTest(profile=profile, reason=reason):
+                    with self.assertRaises(module.AuthoringError):
+                        module.build_document(data, profile=profile)
+            data = self.accepted_case(profile)
+            data["lifecycle"] = "backlog"
+            data["acceptance_items"][0]["unassigned_reason"] = "A concrete method remains unassigned."
+            with self.assertRaises(module.AuthoringError):
+                module.build_document(data, profile=profile)
+
+    def test_safe_unicode_and_literal_escapes_in_reasons_roundtrip_without_loss(self):
+        module = self.module()
+        planlib = load_module(PLANLIB, "planlib_reason_roundtrip")
+        for profile in ("root", "generated"):
+            for reason in (
+                'Live "approval" verification remains unassigned; \\u0085 stays literal.',
+                "実環境の取得検証は未設計です。",
+                "Café approval verification remains undefined.",
+            ):
+                with self.subTest(profile=profile, reason=reason):
+                    data = self.accepted_case(profile)
+                    data["lifecycle"] = "backlog"
+                    for item in data["acceptance_items"]:
+                        for key in ("witness", "stage", "authoritative_only_reason"):
+                            item.pop(key, None)
+                        item["unassigned_reason"] = reason
+                    document = module.build_document(data, profile=profile)
+                    rendered = module.render_plan(document, "991")
+                    values = planlib.parse_manifest_text(rendered.encode("utf-8").decode("utf-8"))
+                    planlib.validate_validation_witness_map(values)
+                    pending = [json.loads(entry) for entry in values["validation_witness_unassigned"]]
+                    self.assertEqual([entry["reason"] for entry in pending],
+                                     [reason] * len(data["acceptance_items"]))
+                    self.assertEqual(pending, document["validation_witness_unassigned"])
+
+    def test_splitline_reasons_refuse_check_and_write_before_effects(self):
+        module = self.module()
+        for profile in ("root", "generated"):
+            for separator in ("\n", "\r", "\r\n", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"):
+                with self.subTest(profile=profile, separator=separator), tempfile.TemporaryDirectory() as tmp:
+                    root = self.make_repository(Path(tmp))
+                    data = self.accepted_case(profile)
+                    data["lifecycle"] = "backlog"
+                    item = data["acceptance_items"][0]
+                    for key in ("witness", "stage", "authoritative_only_reason"):
+                        item.pop(key, None)
+                    item["unassigned_reason"] = f"Live method{separator}remains unassigned."
+                    source = self.write_input(root, data)
+                    before = {path.relative_to(root): path.read_bytes()
+                              for path in root.rglob("*") if path.is_file()}
+                    digest = "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()
+                    with self.assertRaises(module.AuthoringError):
+                        module.check_authoring_input(root, source, profile=profile)
+                    with self.assertRaises(module.AuthoringError):
+                        module.write_authoring_input(root, source, digest, profile=profile)
+                    self.assertEqual({path.relative_to(root): path.read_bytes()
+                                      for path in root.rglob("*") if path.is_file()}, before)
+
+    def test_plan387_complete_checked_input_regenerates_without_requirement_loss(self):
+        source = ROOT / "docs/plan/authoring/387-implement-issue18-limited-implementation-resume.json"
+        data = json.loads(source.read_text(encoding="utf-8"))
+        document = self.module().build_document(data, profile="root")
+        rendered = self.module().render_plan(document, "387")
+        self.assertEqual(rendered, (ROOT / "docs/plan/backlog/387-implement-issue18-limited-implementation-resume.md").read_text(encoding="utf-8"))
+        expected = ['sha256:0d7cabf5a1694a41432b61ad27875ee0c6b69fef2a86b37203c80bee57a323a2', 'sha256:2c84a36e2a222baad191de2332f4cb878a91510ec817db4737c9c521b5a41baa', 'sha256:2c30a0e1bd02f136f1741cda177f803e112048e5bdc61f37305b54b6f94ef372', 'sha256:47022777607a1553215cd75384af833bc3a754eac19a993823a82fa64e959cd2', 'sha256:edad9cbda2cc4ed9975bb1af205b31e2f7a1dd9b3f4242f7c8fb4add73b44e24']
+        self.assertEqual([self.module().text_digest(item) for item in document["acceptance"]], expected)
+        self.assertEqual([self.module().text_digest(document["completion_conditions"][i]["text"]) for i in document["condition_order"]], expected)
+        self.assertEqual(len(document["validation_witness_unassigned"]), 5)
+        self.assertEqual(document["validation_witness_map"], [])
+        self.assertEqual(document["status"], "backlog")
+        for field in ("decisions", "tasks", "validation_notes", "integration_gates"):
+            for clause in data[field]:
+                self.assertIn(clause, rendered)
+
 
 class PlanAuthoringInRepositoryTest(unittest.TestCase):
     """Authoring inside a real repository, where the shared lifecycle lock applies."""
