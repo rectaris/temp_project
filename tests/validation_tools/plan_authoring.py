@@ -436,6 +436,62 @@ class PlanAuthoringTest(unittest.TestCase):
                         module.build_document(data, profile=profile)
                     data["lifecycle"] = "backlog"
 
+    def test_unassigned_report_preserves_reasons_and_marks_draft_completion(self):
+        module = self.module()
+        for profile in ("root", "generated"):
+            for mixed in (False, True):
+                with self.subTest(profile=profile, mixed=mixed):
+                    data = self.accepted_case(profile)
+                    data["lifecycle"] = "backlog"
+                    selected = data["acceptance_items"][:1] if mixed else data["acceptance_items"]
+                    reasons = []
+                    for index, item in enumerate(selected, 1):
+                        for key in ("stage", "witness", "authoritative_only_reason"):
+                            item.pop(key, None)
+                        reason = f"Live target {index} lacks an assigned independent verification method."
+                        item["unassigned_reason"] = reason
+                        reasons.append(reason)
+                    document = module.build_document(data, profile=profile)
+                    report = module.render_report(document, "sha256:" + "0" * 64,
+                                                  next_plan_id="991", plan_path="docs/plan/backlog/991-example.md")
+                    self.assertIn("implementation-admission: blocked (unassigned verification)", report)
+                    for reason in reasons:
+                        self.assertIn("unassigned-reason: " + reason, report)
+                    self.assertNotIn("legacy authoring placeholder", report)
+                    self.assertIn("completion-witness-status: unfulfilled draft", report)
+                    self.assertEqual(report.count("verification-status: unassigned"), len(reasons))
+                    self.assertIn("repository-writes-performed: 0", report)
+                    if mixed:
+                        self.assertIn("stage: " + data["acceptance_items"][1]["stage"], report)
+            assigned = module.build_document(self.accepted_case(profile), profile=profile)
+            report = module.render_report(assigned, "sha256:" + "0" * 64,
+                                          next_plan_id="991", plan_path="docs/plan/active/991-example.md")
+            self.assertNotIn("unassigned", report)
+            self.assertNotIn("unfulfilled draft", report)
+
+    def test_plan387_partial_command_is_never_whole_acceptance_evidence(self):
+        source = ROOT / "docs/plan/authoring/387-implement-issue18-limited-implementation-resume.json"
+        data = json.loads(source.read_text())
+        module = self.module()
+        document = module.build_document(data, profile="root")
+        report = module.render_report(document, "sha256:" + "0" * 64,
+                                      next_plan_id="387", plan_path="docs/plan/backlog/387-implement-issue18-limited-implementation-resume.md")
+        self.assertEqual(report.count("completion-witness-status: unfulfilled draft"), 5)
+        self.assertEqual(report.count("verification-status: unassigned"), 5)
+        self.assertIn("implementation-admission: blocked", report)
+        self.assertNotIn("legacy authoring placeholder", report)
+        self.assertEqual(document["validation_witness_map"], [])
+        # A syntactically complete partial-test map and a success note do not
+        # authorize activation of these original whole E1-E5 conditions.
+        root_policy = load_module(ROOT / "scripts/check-root-agent-policy.py", "plan387_root_pending")
+        rendered = module.render_plan(document, "387")
+        values = root_policy.parse_plan_manifest(rendered.replace("status: backlog", "status: in_progress"))
+        with self.assertRaises(SystemExit):
+            root_policy.check_plan_admission("docs/plan/active/387-implement-issue18-limited-implementation-resume.md", values)
+        data["lifecycle"] = "active"
+        with self.assertRaises(module.AuthoringError):
+            module.build_document(data, profile="root")
+
     def test_unassigned_authoring_rejects_missing_invalid_or_conflicting_reason(self):
         module = self.module()
         for profile in ("root", "generated"):

@@ -3911,6 +3911,10 @@ class PlanValidationCommandsTest(unittest.TestCase):
             target = install / name
             target.write_bytes((ROOT / str(variant["source"]) / name).read_bytes())
             target.chmod(0o755)
+        if not variant["linted"]:
+            shared = repo / "template/.project-agent-workflow/scripts/planlib.py"
+            shared.parent.mkdir(parents=True, exist_ok=True)
+            shared.write_bytes(PLANLIB.read_bytes())
         if variant["linted"]:
             spec = repo / self.COMPLETION_SPEC
             spec.parent.mkdir(parents=True, exist_ok=True)
@@ -4148,6 +4152,92 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     else:
                         self.assertEqual(result.returncode, 0)
                         self.assertEqual(result.stdout, "agent completion gate passed\n")
+
+    def test_pending_verification_refuses_completion_and_finalization_without_effects(self) -> None:
+        # Completed checkboxes and a passing offline note cannot discharge an
+        # explicitly unassigned acceptance method, even after a forged ready status.
+        for variant in self.COMPLETION_GATE_VARIANTS:
+            for operation in ("evidence", "complete", "finalize"):
+                with self.subTest(profile=variant["name"], operation=operation):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        repo = Path(tmp)
+                        self.build_completion_repo(
+                            repo, variant,
+                            plan_status="ready_to_archive" if operation == "finalize" else "in_progress",
+                            notes="- Partial offline state tests passed; whole acceptance remains unmet.",
+                        )
+                        plan = repo / self.COMPLETION_PLAN
+                        pending = json.dumps({
+                            "acceptance_sha256": self.witness_digest("Record the example work."),
+                            "reason": "Live acquisition and independent quality verification are not assigned.",
+                        })
+                        plan.write_text(plan.read_text().replace(
+                            "\n## Tasks", "\nvalidation_witness_schema: 1\nvalidation_witness_unassigned:\n  - " + pending + "\n\n## Tasks", 1
+                        ))
+                        finalizer = Path(str(variant["install"])) / "finalize-active-plan.sh"
+                        (repo / finalizer).write_bytes(
+                            (ROOT / str(variant["source"]) / "finalize-active-plan.sh").read_bytes()
+                        )
+                        (repo / "docs/plan/checked.md").write_text("# Checked Plan Index\n\nid\tpath\n")
+                        before = self.repository_state(repo)
+                        if operation == "finalize":
+                            result = self.run_in_repo(repo, str(finalizer), self.COMPLETION_PLAN)
+                        else:
+                            args = ("--check-completion-evidence",) if operation == "evidence" else ()
+                            result = self.run_completion_plan(repo, variant, *args, self.COMPLETION_PLAN)
+                        self.assertEqual(result.returncode, 1, result.stderr)
+                        self.assertIn("unassigned verification refuses", result.stderr)
+                        self.assertEqual(self.repository_state(repo), before)
+                        self.assertFalse((repo / "docs/plan/checked/2026").exists())
+                        self.assertFalse((repo / ".agent-artifacts").exists())
+
+    def test_legacy_evidence_probe_needs_no_pending_library_but_declarations_fail_closed(self) -> None:
+        for variant in self.COMPLETION_GATE_VARIANTS:
+            for key in ("validation_witness_unassigned", "validation_witness_unassigned ",
+                        "\tvalidation_witness_unassigned", "\xa0validation_witness_unassigned"):
+                with self.subTest(profile=variant["name"], key=key):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        repo = Path(tmp)
+                        self.build_completion_repo(repo, variant)
+                        shared = repo / (".project-agent-workflow/scripts/planlib.py" if variant["linted"]
+                                         else "template/.project-agent-workflow/scripts/planlib.py")
+                        shared.unlink()  # The old minimal probe did not install this dependency.
+                        legacy = self.run_completion_plan(repo, variant, "--check-completion-evidence", self.COMPLETION_PLAN)
+                        self.assertEqual(legacy.returncode, 0, legacy.stderr)
+                        plan = repo / self.COMPLETION_PLAN
+                        plan.write_text(plan.read_text().replace(
+                            "\n## Tasks", "\n" + key + ":\n  - pending\n\n## Tasks", 1
+                        ))
+                        before = self.repository_state(repo)
+                        pending = self.run_completion_plan(repo, variant, "--check-completion-evidence", self.COMPLETION_PLAN)
+                        self.assertEqual(pending.returncode, 1)
+                        self.assertIn("missing canonical plan verification authority", pending.stderr)
+                        self.assertEqual(self.repository_state(repo), before)
+
+    def test_root_admission_refuses_unassigned_verification_before_acceptance(self) -> None:
+        module = load_module(self.ROOT_POLICY, "root_pending_admission")
+        pending = json.dumps({
+            "acceptance_sha256": self.witness_digest("Preserve the whole requirement."),
+            "reason": "The live whole-requirement verification method remains undesigned.",
+        })
+        text = self.admission_plan_text(
+            acceptance="acceptance:\n  - Preserve the whole requirement.\n",
+            validation_witness_unassigned="validation_witness_unassigned:\n  - " + pending + "\n",
+        )
+        self.assertIn("validation_witness_unassigned", module.ADMISSION_LIST_KEYS)
+        for status in ("in_progress", "ready_to_archive", "checked", "deferred"):
+            with self.subTest(status=status):
+                values = module.parse_plan_manifest(text.replace("status: in_progress", "status: " + status))
+                with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as error:
+                    module.check_plan_admission("docs/plan/active/900-example.md", values)
+                self.assertIn("unassigned verification refuses", error.getvalue())
+        # Reading a backlog draft is permitted and preserves the unassigned
+        # declaration; missing/malformed reasons remain invalid there.
+        values = module.parse_plan_manifest(text.replace("status: in_progress", "status: backlog"))
+        module.check_plan_admission("docs/plan/backlog/900-example.md", values)
+        values["validation_witness_unassigned"] = [pending.replace("undesigned", "undesigned\\nnow")]
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            module.check_plan_admission("docs/plan/backlog/900-example.md", values)
 
     def test_completion_evidence_mode_reads_without_lifecycle_effects(self) -> None:
         accepted = {

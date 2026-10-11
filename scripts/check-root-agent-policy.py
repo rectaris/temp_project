@@ -65,6 +65,7 @@ ADMISSION_LIST_KEYS = {
     "feasibility_evidence",
     "completion_conditions",
     "completion_witness_map",
+    "validation_witness_unassigned",
 }
 TIER_ONE_VALUE = "1"
 PLAN_FILE_RE = re.compile(r"([0-9]{3})-[a-z0-9][a-z0-9-]*\.md")
@@ -3825,6 +3826,17 @@ def admission_digest(text: str) -> str:
 
 def check_plan_admission(relative: str, values: dict[str, str | list[str]]) -> None:
     """Require one bounded implementation-start authorization for a numbered plan."""
+
+    # Backlog drafts remain readable; their pending reasons never grant
+    # implementation-start or acceptance authority at an active boundary.
+    if values.get("validation_witness_unassigned"):
+        if values.get("status") != "backlog":
+            fail(f"{relative} unassigned verification refuses activation, execution and acceptance")
+        module = load_planlib_module()
+        try:
+            module.validate_unassigned_verification(values)
+        except module.PlanError as exc:
+            fail(f"{relative} {exc}")
 
     purpose = values.get("plan_purpose", "")
     if purpose not in PLAN_PURPOSE_VALUES:
