@@ -4800,6 +4800,70 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     with self.assertRaises(module.CheckedIndexError):
                         module.validate_checked_index(root)
 
+    def test_unassigned_manifest_rejects_malformed_reasons_coverage_and_active_status(self):
+        module = load_module(PLANLIB, "unassigned_manifest")
+        acceptance = ["Keep authentic approval unresolved.", "Retain original refusal."]
+        records = [{"acceptance_sha256": module.acceptance_digest(text), "reason": "Live acquisition verification is not assigned."} for text in acceptance]
+        base = {"status": "backlog", "acceptance": acceptance, "validation_witness_schema": "1",
+                "validation": ["git diff --check"], "focused_validation": ["python3 tests/focused.py"],
+                "validation_witness_map": [], "validation_witness_unassigned": [json.dumps(r) for r in records]}
+        self.assertEqual(module.validate_validation_witness_map(base), [])
+        mutations = []
+        for reason in ("", " ", "TBD", "t.b.d.", "x" * 241, "語" * 81, "\ud800", None,
+                       *(f"reason{separator}continued" for separator in ("\n", "\r", "\r\n", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"))):
+            changed = dict(records[0]);changed["reason"] = reason
+            mutations.append({"validation_witness_unassigned": [json.dumps(changed), json.dumps(records[1])]})
+        mutations.extend([
+            {"status": "in_progress"}, {"status": "checked"}, {"validation_witness_schema": ""},
+            {"validation_witness_unassigned": [json.dumps(records[0])]},
+            {"validation_witness_unassigned": [json.dumps(records[0])] * 2},
+            {"validation_witness_unassigned": [json.dumps(r) for r in reversed(records)]},
+            {"validation_witness_unassigned": [json.dumps({**records[0], "witness": "git diff --check"}), json.dumps(records[1])]},
+            {"validation_witness_map": [json.dumps({"acceptance_sha256": records[0]["acceptance_sha256"], "stage": "focused", "witness": "python3 tests/focused.py"})]},
+        ])
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                with self.assertRaises(module.PlanError):
+                    module.validate_validation_witness_map({**base, **mutation})
+
+    def test_unassigned_lifecycle_refuses_before_plan_or_index_effects(self):
+        module = load_module(PLANLIB, "unassigned_lifecycle")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            module.ROOT = root
+            module.ACTIVE_DIR = root / "docs/plan/active"
+            module.BACKLOG_DIR = root / "docs/plan/backlog"
+            module.CHECKED_DIR = root / "docs/plan/checked"
+            module.SHELVED_DIR = root / "docs/plan/shelved"
+            module.PLAN = root / "docs/plan/plan.md"
+            module.BACKLOG_DIR.mkdir(parents=True)
+            module.ACTIVE_DIR.mkdir()
+            module.PLAN.write_text("# Active Plan\n\nNo active development items.\n", encoding="utf-8")
+            record = json.dumps({"acceptance_sha256": module.acceptance_digest("Keep approval unresolved."), "reason": "Authentic live approval has no assigned verification method."})
+            text = "status: backlog\nvalidation_witness_unassigned:\n  - " + record + "\n\n## Tasks\n"
+            source = module.BACKLOG_DIR / "991-unassigned.md"
+            source.write_text(text, encoding="utf-8")
+            before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            operations = [
+                lambda: module.check_promotion("991", "docs/plan/backlog/991-unassigned.md", "docs/plan/active/991-unassigned.md"),
+                lambda: module.copy_with_status_exclusive("docs/plan/backlog/991-unassigned.md", "docs/plan/active/991-unassigned.md", "in_progress"),
+                lambda: module.require_predecessors_checked(source),
+                lambda: module.status_text(text, "in_progress"),
+                lambda: module.status_text(text, "checked"),
+            ]
+            for operation in operations:
+                with self.assertRaises(module.PlanError):
+                    operation()
+                self.assertEqual({str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}, before)
+            active = module.ACTIVE_DIR / source.name
+            active.write_text(text.replace("status: backlog", "status: in_progress"), encoding="utf-8")
+            before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            with self.assertRaises(module.PlanError):
+                module.complete_transition("991", "docs/plan/active/991-unassigned.md", "in_progress")
+            with self.assertRaises(module.PlanError):
+                module.set_active_status("991", "docs/plan/active/991-unassigned.md", "in_progress", "ready_to_archive")
+            self.assertEqual({str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}, before)
+
 
 class PlanOverviewTest(unittest.TestCase):
     """Behavioral tests for the read-only plan overview entrypoints."""

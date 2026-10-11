@@ -4349,6 +4349,23 @@ def require_committed_active_plan(plan_arg: str, source_head: str) -> dict[str, 
         plan_text = plan_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise StateError("execution plan must be UTF-8") from exc
+    # Match the canonical manifest reader's nonempty-list condition without
+    # loading another controller. Refuse before any group claim or registry.
+    unassigned = False
+    for raw in plan_text.splitlines():
+        line = raw.rstrip()
+        if line.startswith("## "):
+            break
+        if not line.strip():
+            continue
+        if ":" in line and not line.startswith(" "):
+            key, rest = line.split(":", 1)
+            unassigned = key.strip() == "validation_witness_unassigned"
+            pending = unassigned and bool(rest.strip())
+        else:
+            pending = unassigned and line.lstrip().startswith("- ")
+        if pending:
+            raise StateError("unassigned verification cannot authorize execution start")
     statuses = re.findall(r"^status: (.+)$", plan_text, flags=re.MULTILINE)
     if statuses[:1] != ["in_progress"]:
         raise StateError("parent-direct preparation requires an in_progress active plan")

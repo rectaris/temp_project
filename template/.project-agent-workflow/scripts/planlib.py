@@ -90,6 +90,7 @@ LIST_KEYS = {
     "focused_validation",
     "validation_authority_scope",
     "validation_witness_map",
+    "validation_witness_unassigned",
     "feasibility_evidence",
     "completion_conditions",
     "completion_witness_map",
@@ -728,6 +729,7 @@ def _matching_checked_paths(
 
 def require_predecessors_checked(path: Path) -> None:
     values = parse_manifest(path)
+    require_assigned_verification(values)
     predecessors = validate_predecessor_list(values, str(path))
     checked_rows = read_checked_rows()
     for predecessor in predecessors:
@@ -1736,11 +1738,57 @@ def validate_companion_validation_authority(
     )
 
 
+def require_assigned_verification(values: dict[str, str | list[str]]) -> None:
+    if values.get("validation_witness_unassigned"):
+        raise PlanError("unassigned verification refuses activation, execution and acceptance")
+
+
+def validate_unassigned_verification(values: dict[str, str | list[str]]) -> list[dict[str, str]]:
+    raw = values.get("validation_witness_unassigned", [])
+    if not isinstance(raw, list):
+        raise PlanError("validation_witness_unassigned must be a list")
+    if not raw:
+        return []
+    if manifest_scalar(values, "status") != "backlog":
+        require_assigned_verification(values)
+    acceptance = values.get("acceptance", [])
+    if not isinstance(acceptance, list):
+        raise PlanError("plan acceptance must be a list")
+    digests = [acceptance_digest(item) for item in acceptance]
+    records = []
+    for item in raw:
+        try:
+            record = json.loads(item)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise PlanError("validation_witness_unassigned entry is not valid JSON") from exc
+        if not isinstance(record, dict) or set(record) != {"acceptance_sha256", "reason"}:
+            raise PlanError("validation_witness_unassigned entry has invalid fields")
+        reason = record["reason"]
+        try:
+            reason_bytes = reason.encode("utf-8") if isinstance(reason, str) else b""
+        except UnicodeError as exc:
+            raise PlanError("validation_witness_unassigned reason must be UTF-8 text") from exc
+        if (not isinstance(reason, str) or not reason or reason != reason.strip()
+                or len(reason_bytes) > VALIDATION_WITNESS_REASON_MAX_BYTES
+                or any(ord(char) < 0x20 or char == "\x7f" for char in reason)
+                or reason.splitlines() != [reason]
+                or is_admission_placeholder(reason.replace(".", ""))):
+            raise PlanError("validation_witness_unassigned requires a bounded concrete reason")
+        if record["acceptance_sha256"] not in digests:
+            raise PlanError("validation_witness_unassigned has an unknown acceptance digest")
+        records.append(record)
+    pending = [record["acceptance_sha256"] for record in records]
+    if len(set(pending)) != len(pending) or pending != [item for item in digests if item in pending]:
+        raise PlanError("validation_witness_unassigned must be unique and in source order")
+    return records
+
+
 def validate_validation_witness_map(
     values: dict[str, str | list[str]],
     *,
     plan_path: Path | None = None,
 ) -> list[dict[str, str]]:
+    unassigned = validate_unassigned_verification(values)
     acceptance = values.get("acceptance", [])
     focused = values.get("focused_validation", [])
     authoritative = values.get("validation", [])
@@ -1767,7 +1815,7 @@ def validate_validation_witness_map(
             declared_context, root=plan_repository_root(plan_path)[0]
         )
     if not schema:
-        if raw_map:
+        if raw_map or unassigned:
             raise PlanError("validation_witness_map requires validation_witness_schema: 1")
         if required:
             if plan_path is None:
@@ -1777,7 +1825,7 @@ def validate_validation_witness_map(
     if schema != "1":
         raise PlanError(f"unsupported validation_witness_schema: {schema!r}")
 
-    if not raw_map:
+    if not raw_map and not unassigned:
         if required:
             raise PlanError("in-progress integration plan missing validation_witness_map")
         return []
@@ -1849,7 +1897,9 @@ def validate_validation_witness_map(
         records.append(record)
 
     mapped_digests = [record["acceptance_sha256"] for record in records]
-    if mapped_digests != acceptance_digests:
+    pending_digests = [record["acceptance_sha256"] for record in unassigned]
+    if (mapped_digests != [item for item in acceptance_digests if item not in pending_digests]
+            or set(mapped_digests) & set(pending_digests)):
         raise PlanError(
             "validation_witness_map must cover acceptance items exactly once and in source order"
         )
@@ -2009,6 +2059,8 @@ def validate_admission_record(
 
 
 def status_text(text: str, status: str) -> str:
+    if status != "backlog":
+        require_assigned_verification(parse_manifest_text(text))
     updated, count = re.subn(r"^status: .*", f"status: {status}", text, count=1, flags=re.MULTILINE)
     if count != 1:
         raise PlanError("plan must contain exactly one leading status field to update")
@@ -2131,6 +2183,8 @@ def check_active_mapping(plan_id: str, path: str, status: str) -> None:
 
 
 def set_active_status(plan_id: str, path: str, old_status: str, new_status: str) -> None:
+    if new_status != "backlog" and (ROOT / path).is_file():
+        require_assigned_verification(parse_manifest(ROOT / path))
     if new_status == "in_progress":
         require_predecessors_checked(ROOT / path)
     with lifecycle_lock():
@@ -2148,6 +2202,7 @@ def complete_transition(plan_id: str, path: str, old_status: str) -> None:
     target = ROOT / path
     if target.parent != ACTIVE_DIR:
         raise PlanError(f"active plan path is outside active directory: {path}")
+    require_assigned_verification(parse_manifest(target))
     with lifecycle_lock():
         check_active_mapping(plan_id, path, old_status)
         original_plan = target.read_text(encoding="utf-8")
@@ -2208,6 +2263,7 @@ def check_promotion(plan_id: str, source: str, destination: str) -> None:
     destination_path = ROOT / destination
     if not source_path.is_file():
         raise PlanError(f"missing promotion source: {source}")
+    require_assigned_verification(parse_manifest(source_path))
     if destination_path.exists():
         raise PlanError(f"promotion destination already exists: {destination}")
     collisions = [path for path in _plan_paths_for_id(plan_id) if path != source_path]

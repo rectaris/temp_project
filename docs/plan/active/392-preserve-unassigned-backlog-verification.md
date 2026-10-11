@@ -23,10 +23,13 @@ completion_conditions:
 completion_witness_map:
   - {"condition_sha256":"sha256:c74fbffbcb49348a1b754a462991486c2d95a79effa31495e23e439328f88e58","witness":"python3 tests/test-validation-tools.py"}
   - {"condition_sha256":"sha256:24fb66d8dd2e949009b9dd58835c608d222ae00f39b44f6b95d94f30daefb137","witness":"python3 tests/test-validation-tools.py"}
-  - {"condition_sha256":"sha256:95c3a482dd64b96b4d8ed5c74b3c7576cdf1f01b30dd3c9b5b0f4fbc26c130af","witness":"python3 tests/test-validation-tools.py"}
+  - {"condition_sha256":"sha256:95c3a482dd64b96b4d8ed5c74b3c7576cdf1f01b30dd3c9b5b0f4fbc26c130af","witness":"python3 tests/test-plan-execution-state.py"}
   - {"condition_sha256":"sha256:437bb07417efe09bfeb78372518a48d5b3bf8842d9538641043e7d53d9ce35a1","witness":"python3 tests/test-validation-tools.py"}
 write_scope:
   - scripts/project_workflow/plan_authoring.py
+  - scripts/plan-execution-state.py
+  - template/.project-agent-workflow/scripts/plan-execution-state.py
+  - tests/test-plan-execution-state.py
   - template/.project-agent-workflow/scripts/plan_authoring.py
   - template/.project-agent-workflow/scripts/planlib.py
   - docs/agent/SPEC_PLAN_WORKFLOW.md
@@ -55,6 +58,7 @@ required_specs:
   - docs/agent/SPEC_AGENT_LOGGING.md
 focused_validation:
   - python3 tests/test-validation-tools.py
+  - python3 tests/test-plan-execution-state.py
 validation:
   - scripts/lint-project-workflow.sh
   - tests/smoke.sh
@@ -96,3 +100,12 @@ checked_summary_ja: 未開始backlogの検証方法の未定を保持し、実�
 - The product focused command and regression cases are future validation definitions only; none has run for this implementation. Direct-task plan authoring lint/smoke results validate preparation and do not satisfy this plan's product acceptance or E1-E5.
 - The ordinary publisher journals source fast-forward, evidence relocation and exact task worktree/branch cleanup. Its retain exception is only for a completed numbered replan transition, not this authoring task. Hold at this boundary until the exact new targets are authorized; do not manually update refs, remotely publish a provisional active plan or reuse plan389's deletion approval.
 - Full external transcript and hook evidence are not collected for this authoring phase. Reuse existing known hook support and approvals without pretending they are this implementation's fresh execution-bound route or quality receipt.
+
+- Review correction scope authorized through parent task 01a11868-106d-75d6-8d79-78db6b86500b after the first plan392-only limited review found a Medium execution-start gap. The first nine paths froze that candidate; add only root/template plan-execution-state.py and tests/test-plan-execution-state.py for the same accepted invariant. The parent instructed: 未割当状態で開始させないという既承認仕様を満たすため、今回の指摘に必要な最小の実装・回帰テスト追加は委任範囲として進めてください。 No new plan, generalized feature or successor is authorized.
+- Require the committed active-plan reader to refuse the canonical nonempty unassigned list before group ledger claims or registry creation. Keep committed-byte binding, assigned preparation and all existing runtime-loader/security controls unchanged; add no loader and import no PR1 or unadopted local-dev changes. Validate both effect-free refusal and assigned preparation using the registered execution-state suite in addition to the existing focused suite; lint/smoke remain unchanged.
+- This correction follows the owner's local-start exception at 2026-10-11 06:28 UTC and approval at 07:14 UTC, quoted by the parent: 「計画392限定のレビュー証拠要件の変更」と「合格後の公開保留解除」を承認する。 For this plan only, use a separate read-only review of actual specifications, code, exact changed target and validation evidence. Automatic first-input packet-start observation, proof of zero inherited turns and runtime context isolation remain unconfirmed; do not equate this limited evidence with the former formal guarantee or mint or modify a historical execution record. Retain the original ledger's exact historical plan binding; record this authorized plan amendment and changed target separately.
+- First limited review: Medium1, hold; main session confirmed the separate preparation parser could create external state before rejecting pending verification. Preserve its exact report and first target hash; no finding is erased by this scope extension. Require a fresh changed-target read-only review before accepting the corrected candidate. Publication remains conditional on clearance, exact committed patch and separate authority for any new task-worktree/branch deletion; no deletion or additional permission operation is authorized here.
+
+- Second limited review retained Medium1: interior U+0085 NEL passed both reason validators but was split by the canonical reader, leaving unreadable rendered JSON. The first execution-start finding was confirmed corrected. Keep both exact reports, candidate hashes and all previous results; do not treat the successful suites as coverage of the omitted counterexample.
+- The parent explicitly authorized this bounded same-plan continuation and exactly one additional read-only review after the NEL correction: 親の継続判断として、確認済みU+0085不具合を最小修正し、文字列roundtripの関連境界を回帰検証、対象hashを更新して追加1回のreadonly品質レビューを行う範囲で進めてください。 The owner also delegated implementation time and review counts. This is an explicit plan392-only limited-evidence exception for a third review, not a global budget change, implicit unlimited rerun, formal epoch continuation or authority to rewrite old ledger/registry evidence. If that review leaves a new finding, retain it and report its content and minimum repair scope to the parent instead of inferring another review allowance.
+- Require each unassigned reason to survive the canonical reader's splitlines boundary unchanged. Reject every such line boundary before checked authoring writes, and validate canonical decoded reasons under the same condition. Test U+0085 together with LF, CR, CRLF, VT, FF, FS, GS, RS, U+2028 and U+2029; preserve substantive Unicode and literal escape text exactly on roundtrip. Keep ordinary control, UTF-8, byte-limit, digest-coverage and assigned/legacy checks intact. Preserve the execution-start correction; no runtime loader, PR1 import, old safety-refusal retry or new deletion is authorized.
