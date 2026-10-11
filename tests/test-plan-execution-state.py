@@ -11812,5 +11812,152 @@ class RetainedEvidenceStatusTest(unittest.TestCase):
         self.assertFalse(matched["report_grants_authority"])
 
 
+    def candidate_for_report(self, state: Path, lifecycle: Path, run_id: str,
+                             attempt: str, target: str, *, kind: str = "initial") -> str:
+        result = self.start_writable_attempt(state, lifecycle, run_id, attempt, kind=kind)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        candidate = digest("report manifest:" + attempt)
+        self.write_applied_lifecycle(lifecycle, run_id, attempt, candidate, target[7:])
+        payload = json.loads(lifecycle.read_text())
+        rounds = json.loads(state.read_text())["correction_rounds"]
+        payload.update(phase="admitted", focused_validation_count=0,
+                       authoritative_validation_count=0, correction_round=rounds,
+                       candidate_generations=rounds + 1, parent_review_rejections=rounds)
+        lifecycle.write_text(json.dumps(payload) + "\n")
+        self.append_candidate_review_fixture(
+            state, lifecycle, run_id, attempt, candidate, target[7:], digest("one invariant")
+        )
+        return candidate
+
+    def candidate_validation_for_report(self, state: Path, lifecycle: Path,
+                                        run_id: str, label: str, suite: str) -> None:
+        payload = json.loads(lifecycle.read_text())
+        payload.update(phase=suite + "_passed")
+        payload[suite + "_validation_count"] = 1
+        lifecycle.write_text(json.dumps(payload, sort_keys=True) + "\n")
+        result = self.run_cli(
+            "record", str(state), "--run-id", run_id, "--event-id", label,
+            "--event-type", suite + "_validation", "--implementation-mode", "candidate",
+            "--candidate-lifecycle-digest", digest(lifecycle.read_bytes()),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_candidate_validation_uses_reviewed_attempt_despite_changing_lifecycle(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("report-candidate-attribution")
+        self.candidate_for_report(state, lifecycle, run_id, "candidate-A", self.target)
+        self.candidate_validation_for_report(state, lifecycle, run_id, "focus-A", "focused")
+        self.candidate_validation_for_report(state, lifecycle, run_id, "auth-A", "authoritative")
+        events = json.loads(state.read_text())["events"]
+        identities = [event["candidate_lifecycle_digest"] for event in events
+                      if event["event_type"] != "writable_attempt_started"]
+        self.assertEqual(len(set(identities)), 3, "review and validation identities must differ")
+        report = self.report(state=state)
+        self.assertEqual(report, self.report(state=state, generated=True))
+        self.assertEqual([item["stage"] for item in report["recorded_validation_for_target"]],
+                         ["focused_validation", "authoritative_validation"])
+        self.assertNotIn("target_authoritative_validation_not_attributed",
+                         report["acceptance_holds"]["missing_evidence"])
+        self.assertFalse(report["report_grants_authority"])
+        self.assertEqual(report["consumption"]["authoritative_validation_events"], 1)
+        wrong = self.report(state=state, target=digest("unreviewed patch"))
+        self.assertEqual(wrong["recorded_validation_for_target"], [])
+
+    def test_candidate_validation_never_crosses_attempt_or_review_boundaries(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("report-candidate-boundaries")
+        first = self.candidate_for_report(state, lifecycle, run_id, "candidate-A", self.target)
+        self.candidate_validation_for_report(state, lifecycle, run_id, "focus-A", "focused")
+        result = self.close_writable_attempt(
+            state, lifecycle, run_id, "candidate-A", invariant=digest("one invariant"),
+            outcome="correction_requested", reason="evidence_incomplete", candidate=first,
+            lifecycle_digest=digest(lifecycle.read_bytes()),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        other = digest("different candidate patch")
+        self.candidate_for_report(state, lifecycle, run_id, "candidate-B", other, kind="correction")
+        self.candidate_validation_for_report(state, lifecycle, run_id, "auth-B", "authoritative")
+        for target, expected in [(self.target, ["focused_validation"]),
+                                 (other, ["authoritative_validation"])]:
+            with self.subTest(target=target):
+                report = self.report(state=state, target=target)
+                self.assertEqual(report, self.report(state=state, target=target, generated=True))
+                self.assertEqual([item["stage"] for item in report["recorded_validation_for_target"]],
+                                 expected)
+                self.assertFalse(report["report_grants_authority"])
+        self.assertIn("target_authoritative_validation_not_attributed",
+                      self.report(state=state)["acceptance_holds"]["missing_evidence"])
+
+    def test_legacy_review_without_target_digest_remains_unattributed(self) -> None:
+        result = self.record("legacy-review", "parent_review", "--invariant-digest", digest("one invariant"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(self.state.read_text())
+        event = payload["events"][-1]
+        del event["review_target_digest"]
+        event["event_digest"] = STATE_MODULE.canonical_digest(
+            {key: value for key, value in event.items() if key != "event_digest"}
+        )
+        payload["event_chain_digest"] = event["event_digest"]
+        STATE_MODULE.validate_state(payload)
+        self.state.write_text(json.dumps(payload) + "\n")
+        report = self.report()
+        self.assertEqual(report, self.report(generated=True))
+        self.assertEqual(report["reviewer_outcome"]["status"], "not_recorded")
+        self.assertEqual(report["recorded_validation_for_target"], [])
+        self.assertFalse(report["report_grants_authority"])
+
+    def test_json_overflow_in_unexamined_producer_fields_never_passes(self) -> None:
+        classes = [
+            {},
+            {"schema_version": 1, "suite": "focused", "passed": True,
+             "implementation_mode": "candidate",
+             "commands": [{"argv": ["fixture-test"], "returncode": 0}]},
+            {"schema_version": 1, "record_type": "candidate_preflight_diagnostic",
+             "evidence_class": "diagnostic", "is_validation_evidence": False,
+             "status": "completed", "timed_out": False, "output_truncated": False,
+             "exit_status": 0, "passed": True},
+        ]
+        for index, fields in enumerate(classes):
+            for number in ["1e999", "-1e999", "1e309", "1e308"]:
+                with self.subTest(evidence_class=index, number=number):
+                    evidence = self.evidence(f"overflow-{index}-{number}",
+                                             telemetry={"durations": ["NUMERIC_TOKEN"]}, **fields)
+                    evidence.write_text(evidence.read_text().replace('"NUMERIC_TOKEN"', number))
+                    report = self.report(evidence)
+                    self.assertEqual(report, self.report(evidence, generated=True))
+                    item = report["test_evidence"][0]
+                    if number == "1e308":
+                        self.assertEqual(item["reported_result"], "pass")
+                    else:
+                        self.assertEqual(item["binding_status"], "unreadable_or_malformed")
+                        self.assertNotEqual(item["reported_result"], "pass")
+
+    def test_diagnostic_failure_declarations_cannot_coexist_with_pass(self) -> None:
+        for index, failure in enumerate(["assertion failed", "", {}, False, None]):
+            with self.subTest(failure=failure):
+                evidence = self.evidence(
+                    f"diagnostic-failure-{index}", schema_version=1,
+                    record_type="candidate_preflight_diagnostic", evidence_class="diagnostic",
+                    is_validation_evidence=False, status="completed", timed_out=False,
+                    output_truncated=False, exit_status=0, passed=True, failure=failure,
+                )
+                report = self.report(evidence)
+                self.assertEqual(report, self.report(evidence, generated=True))
+                item = report["test_evidence"][0]
+                if failure is None:
+                    self.assertEqual(item["reported_result"], "pass")
+                else:
+                    self.assertEqual(item["binding_status"], "malformed")
+                    self.assertNotEqual(item["reported_result"], "pass")
+        failed = self.evidence(
+            "diagnostic-valid-failure", schema_version=1,
+            record_type="candidate_preflight_diagnostic", evidence_class="diagnostic",
+            is_validation_evidence=False, status="completed", timed_out=False,
+            output_truncated=False, exit_status=1, passed=False, failure="assertion failed",
+        )
+        item = self.report(failed)["test_evidence"][0]
+        self.assertEqual(item["binding_status"], "matched_declared_target")
+        self.assertEqual(item["reported_result"], "fail")
+
+
 if __name__ == "__main__":
     unittest.main()

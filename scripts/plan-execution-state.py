@@ -7907,8 +7907,15 @@ def report_retained_evidence(args: argparse.Namespace) -> None:
         def reject_constant(_value: str) -> Any:
             raise StateError("retained input has a nonfinite JSON constant")
 
+        def finite_float(value: str) -> float:
+            parsed = float(value)
+            if not math.isfinite(parsed):
+                raise StateError("retained input has an overflowing JSON number")
+            return parsed
+
         return json.loads(
-            raw, object_pairs_hook=unique_object, parse_constant=reject_constant
+            raw, object_pairs_hook=unique_object, parse_constant=reject_constant,
+            parse_float=finite_float,
         ), digest(raw)
 
     try:
@@ -8077,7 +8084,7 @@ def report_retained_evidence(args: argparse.Namespace) -> None:
             )
             valid = report["status"] == expected_status and report["passed"] == (
                 expected_status == "completed" and statuses == [0]
-            )
+            ) and not (report["passed"] and report.get("failure") is not None)
         if valid and evidence_class == "formal_validation_report":
             valid = not (report["passed"] and report.get("failure") is not None)
         if valid and report.get("passed") is True:
@@ -8100,7 +8107,7 @@ def report_retained_evidence(args: argparse.Namespace) -> None:
     events = state["events"]
     reviews = [
         event for event in events if event["event_type"] == "parent_review"
-        and event["review_target_digest"] == target
+        and event.get("review_target_digest", "") == target
         and event["independent_review_receipt_digest"]
         and event["candidate_lifecycle_digest"]
     ]
@@ -8117,12 +8124,45 @@ def report_retained_evidence(args: argparse.Namespace) -> None:
             "finding_severities": review["finding_severities"],
             "provenance": "verified_execution_event_chain",
         }
+    # Candidate reviews bind a stable attempt/manifest/patch identity, while
+    # validation events bind the lifecycle file after its phase/counters change.
+    # Attribute only validations inside that already reviewed candidate attempt;
+    # legacy validations without an attributable attempt remain unassigned.
+    candidate_validation_events: set[str] = set()
+    current_attempt = ""
+    current_candidate: tuple[str, str, str] | None = None
+    reviewed_candidate = (
+        (review["attempt_id"], review["candidate_digest"], target)
+        if review is not None and review["implementation_mode"] == "candidate"
+        else None
+    )
+    for event in events:
+        kind = event["event_type"]
+        if kind == "writable_attempt_started":
+            current_attempt = event["attempt_id"]
+            current_candidate = None
+        elif kind in {"attempt_closed", "candidate_generation", "correction_rejected"}:
+            current_candidate = None
+            if kind == "attempt_closed":
+                current_attempt = ""
+        elif kind == "parent_review" and event.get("review_target_digest"):
+            current_candidate = (
+                (event["attempt_id"], event["candidate_digest"], event["review_target_digest"])
+                if event["implementation_mode"] == "candidate"
+                and event["attempt_id"] == current_attempt else None
+            )
+        elif kind in {"focused_validation", "authoritative_validation"}:
+            if reviewed_candidate is not None and current_candidate == reviewed_candidate:
+                candidate_validation_events.add(event["event_digest"])
     validations = [
         {"event_digest": event["event_digest"], "stage": event["event_type"]}
         for event in events if event["event_type"] in {
             "focused_validation", "authoritative_validation"
-        } and review is not None
-        and event["candidate_lifecycle_digest"] == review["candidate_lifecycle_digest"]
+        } and review is not None and (
+            event["event_digest"] in candidate_validation_events
+            if review["implementation_mode"] == "candidate"
+            else event["candidate_lifecycle_digest"] == review["candidate_lifecycle_digest"]
+        )
     ]
     missing = []
     if not clearing:
