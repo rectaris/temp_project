@@ -1,6 +1,6 @@
 # Report retained test evidence separately from review and acceptance
 
-status: in_progress
+status: checked
 primary_invariant: Read-only evidence reporting never changes retained source bytes, run state, spent resources, execution permission or acceptance gates.
 task_types:
   - template_workflow
@@ -65,9 +65,9 @@ checked_summary_ja: テスト証拠・レビュー結果・受入保留を独立
 
 ## Tasks
 
-- [ ] Implement bounded read-only reporting using adopted validators and exact retained target/provenance fields.
-- [ ] Add the planned root/generated focused tests and confirm input bytes and existing gate outcomes are unchanged.
-- [ ] Run focused cases, exact-target independent quality review and unchanged locked lint/smoke through the admitted task workflow before publication.
+- [x] Implement bounded read-only reporting using adopted validators and exact retained target/provenance fields.
+- [x] Add the planned root/generated focused tests and confirm input bytes and existing gate outcomes are unchanged.
+- [x] Run focused cases, exact-target independent quality review and unchanged locked lint/smoke through the admitted task workflow before publication.
 
 ## Validation Notes
 
@@ -83,3 +83,11 @@ checked_summary_ja: テスト証拠・レビュー結果・受入保留を独立
 - Current owner verbatim instruction: 提案の方針で進めよ。 Source Sentinel_87a75c5dbcc081918eec82cb2ca5ed90 at2026-10-11T11:14Z, approving proposed389-only implementation start, limited review evidence and publication after clearance. Parent delegation permits the established3path report with needed regressions/document alignment and one meaningful draft PR containing392 closure.
 - Runtime first-packet observation, zero inherited context and runtime isolation remain unconfirmed. The prior unchanged producer/probe evidence is retained; no repeat probe, formal runtime clearance or stopped-run recovery is claimed. No389 implementation review has yet been spent; first review and at most one correction confirmation retain their actual results and target hashes.
 - 392 is checked under its approved limited criterion. Its completion is neither387 start permission nor E1-E5/livePR1 acceptance; all original backlog requirements, unassigned reasons and safety holds remain.
+- Current389 completion evidence at2026-10-11: the product commit is a941f5f3ded3ac06c5aee4545db91d72159318b9, exactly one child of published authoring9adbb85d156cf27fd2ce43a05212411c4a337d43. Its full-index3path patch SHA-256 is1ebddc9dd875bf841d5c9b03ffad9bb0cc27ccb41314ed98b1bac5faf00e5025; root/generated report scripts match byte-for-byte and all pre-existing gate, mutator and test bytes remain unchanged.
+- Focused validation `uv run --locked python3 tests/test-plan-execution-state.py RetainedEvidenceStatusTest` passed9cases on the exact final patch. The initial focused run failed because two new synthetic fixtures omitted the mandatory invariant digest; its raw failure and bounded diagnosis remain retained. The fixtures were corrected without changing existing assertions or authority.
+- Limited read-only review1 found2Medium defects: contradictory captured-test pass display and unattributed global acceptance display. Both were corrected within the same3paths; review2 returned `REVIEW-VERDICT: none` for the exact final patch and focused receipt. Both actual review starts/results and original hashes are retained;2of2 limited reviews are consumed, with no continuation, successor or budget reset. Main-session exact-target acceptance followed that review. The requested change_reviewer/Sol-high profile is not a runtime attestation.
+- Required validation was executed once each after the acceptable final review in this task worktree: `uv run --locked scripts/lint-project-workflow.sh` exit0,317.501seconds; `uv run --locked tests/smoke.sh` exit0,112.230seconds. Commands, fixture locations and HOME were unchanged, with formal minimal host execution approval. A prior static mirror check could not open the default uv cache in the normal sandbox; the same check passed under formal approval, separately retained as an environment-only incident.
+- All4completion conditions and the single acceptance digest retain their original focused witness. The regressions cover matching receipts with missing metadata, diagnostic/formal classes, absent/interim/unattributed review, stale/contradictory inputs, bounded malformed files, source-byte and gate preservation, attributed ledger review, and candidateA correction followed by candidateB acceptance queried asA. Run-wide acceptance is explicitly global and target closure remains unattributed by this reader.
+- Completion uses only the explicit389 owner criterion stated above. The fresh prepared389 execution ledger remains unchanged with no fabricated review-route, formal review, writable-attempt or canonical accepted-close event. Runtime packet-start observation, zero inherited turns and runtime isolation remain unconfirmed. This local unit completion never supplies those guarantees,387 execution permission, E1-E5 acceptance or PR1 adoption.
+- Persistent measured stdout/stderr, receipt digests, both verbatim reviewer reports, target records, private-state snapshots and protection inventories are retained under `.agent-artifacts/issue18-plan389-implementation-20261011/`. A current full transcript and hook event source were not collected as formal execution evidence; both absences remain explicit in the run manifest.
+- Before product completion, the protected PR1 inventory2641items and shared-existing evidence/registry inventory18905items remained identical, together with387/418, old38924a80 authoring, old392 ledger and main/dev. The earlier source-ref omission created an effect-free direct task bound to dev; it was caught before a repository write and retained unchanged. Its stopped-retirement ancestry is not proven eligible, so no alternate deletion or owner-record rewrite was attempted. A local template-feedback draft records this operating error with revision/attribution unknown; no tracked improvement record is persisted in this product task.
