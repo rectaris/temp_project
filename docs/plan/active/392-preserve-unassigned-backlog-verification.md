@@ -38,6 +38,11 @@ write_scope:
   - tests/validation_tools/plan.py
   - docs/plan/backlog/387-implement-issue18-limited-implementation-resume.md
   - docs/plan/authoring/387-implement-issue18-limited-implementation-resume.json
+  - scripts/check-root-agent-policy.py
+  - scripts/complete-plan.sh
+  - scripts/finalize-active-plan.sh
+  - template/.project-agent-workflow/scripts/complete-plan.sh
+  - template/.project-agent-workflow/scripts/finalize-active-plan.sh
 preservation_scope:
   - none
 context_files:
@@ -68,10 +73,10 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:26f751b2d83893a1d445df220e51cd15a298c8a8b8c9f97f1e57e5b81c72fd92","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
 integration_gates:
-  - Authoring is a direct task, not product execution. Before any declared code/policy/test implementation, formally publish this active plan to the exact bound PR20 source and prepare its separate implementation task. Publication requires exact new cleanup authority; none is inferred from specification approval or the separate plan389 task.
-  - Use the adopted bounded parent-direct path because the declared scripts/tests/template control paths are protected from candidate-worker generation. Bind a fresh task-specific execution ledger and genuine native route/review evidence through existing adopted commands before product writes. No new review backend or old review25/namespace retry.
-  - Candidate authoring/planlib behavior runs only in isolated regression fixtures until exact-target independent clearance, unchanged focused/full validation and formal publication. Never use candidate controls to activate themselves or plan387. Keep all original service/access stops, consumption and missing evidence.
-  - PR20 may carry the bounded contract repair and plan387 regeneration, with its title/body rewritten around the final diff and final-SHA CI checked after an authorized normal push. No PR20 merge, main/dev direct write, force push, release or additional PR is required or authorized.
+  - Before product changes, publish this scope amendment through the formal direct-task publisher to the exact bound followup source, then prepare the separate plan392 implementation task. This authoring task does not initialize or modify a product execution ledger.
+  - Use the parent-authorized plan392-only limited-evidence continuation recorded below. Keep the old ledger and registries unchanged; no fabricated packet observation, inherited-turn isolation guarantee, consumption record or formal epoch claim.
+  - Run candidate control behavior only in isolated regression fixtures until exact-target review clearance, unchanged focused/full validation and publication. Plan387 stays unstarted backlog; plan418 stays deferred. All original refusal, consumption, evidence and live acceptance holds remain.
+  - PR20 is merged and must not be edited. After exact reviewed-commit publication, normal-push only the bound followup source and create a draft PR to dev, then inspect same-SHA CI. No main/dev direct push, merge, force push, release or safety-refusal retry.
 checked_summary_ja: 未開始backlogの検証方法の未定を保持し、実装開始と受入を拒否する。
 
 ## Decisions
@@ -109,3 +114,8 @@ checked_summary_ja: 未開始backlogの検証方法の未定を保持し、実�
 - Second limited review retained Medium1: interior U+0085 NEL passed both reason validators but was split by the canonical reader, leaving unreadable rendered JSON. The first execution-start finding was confirmed corrected. Keep both exact reports, candidate hashes and all previous results; do not treat the successful suites as coverage of the omitted counterexample.
 - The parent explicitly authorized this bounded same-plan continuation and exactly one additional read-only review after the NEL correction: 親の継続判断として、確認済みU+0085不具合を最小修正し、文字列roundtripの関連境界を回帰検証、対象hashを更新して追加1回のreadonly品質レビューを行う範囲で進めてください。 The owner also delegated implementation time and review counts. This is an explicit plan392-only limited-evidence exception for a third review, not a global budget change, implicit unlimited rerun, formal epoch continuation or authority to rewrite old ledger/registry evidence. If that review leaves a new finding, retain it and report its content and minimum repair scope to the parent instead of inferring another review allowance.
 - Require each unassigned reason to survive the canonical reader's splitlines boundary unchanged. Reject every such line boundary before checked authoring writes, and validate canonical decoded reasons under the same condition. Test U+0085 together with LF, CR, CRLF, VT, FF, FS, GS, RS, U+2028 and U+2029; preserve substantive Unicode and literal escape text exactly on roundtrip. Keep ordinary control, UTF-8, byte-limit, digest-coverage and assigned/legacy checks intact. Preserve the execution-start correction; no runtime loader, PR1 import, old safety-refusal retry or new deletion is authorized.
+
+- Followup after owner merge of PR20 at public dev786d960501e6df0bee3d49cc0a765bdc162bde96: retain the historical records above. The parent authorizes one same-purpose correction of the three remaining findings and at most two additional limited read-only reviews (initial and, if needed, correction confirmation). The three previous limited reviews and their outcomes remain consumed; this is not a formal epoch continuation or reset. Old ledger/registry bytes stay unchanged.
+- Owner evidence received through parent task01a11868-106d-75d6-8d79-78db6b86500b: 「計画392限定のレビュー証拠要件の変更」と「合格後の公開保留解除」を承認する。 The owner delegates implementation timing and review counts. This finite continuation applies only to in-progress392, not plan387 or any other plan; missing runtime packet/isolation facts remain unconfirmed.
+- Correct root completion/finalization to reject remaining unassigned verification before effects, including evidence-only checks; reuse the canonical pending predicate. Make authoring check print the concrete reason and an unfulfilled-draft warning for completion commands associated with pending acceptance. Original E1-E5 texts/digests, backlog387 and deferred418 remain unchanged; offline passes supply no whole acceptance, activation or implementation authority. Honest acquisition/final-target/independent-quality witness design remains before plan387 activation.
+- Formal followup source is refs/heads/issue18/plan392-pending-verification-followup-20261011 at public dev786d960; local dev81 commits and PR1 candidate are excluded. The first formal prepare was refused because the host review still read the earlier read-only phase; one identical retry was explicitly authorized after the current delegation evidence and succeeded. Keep the refusal evidence; no changed command, alternate route or permission setting was used.
