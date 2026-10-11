@@ -11959,5 +11959,56 @@ class RetainedEvidenceStatusTest(unittest.TestCase):
         self.assertEqual(item["reported_result"], "fail")
 
 
+    def test_formal_validation_failure_declarations_cannot_be_reported_as_pass(self) -> None:
+        cases = [
+            {"status": "failed"}, {"status": "timed_out"},
+            {"status": "output_limit_exceeded"}, {"timed_out": True},
+            {"output_truncated": True}, {"timed_out": 1},
+            {"output_truncated": "true"}, {"status": "unknown"},
+            {"status": 1},
+            {"status": "completed", "timed_out": True, "passed": False},
+            {"status": "completed", "output_truncated": True, "passed": False},
+            {"status": "timed_out", "timed_out": False, "passed": False},
+            {"status": "output_limit_exceeded", "output_truncated": False, "passed": False},
+        ]
+        for index, fields in enumerate(cases):
+            defaults = {"schema_version": 1, "suite": "authoritative", "passed": True,
+                        "implementation_mode": "candidate",
+                        "commands": [{"argv": ["fixture-test"], "returncode": 0}]}
+            defaults.update(fields)
+            evidence = self.evidence("formal-contradiction-" + str(index), **defaults)
+            for generated in (False, True):
+                with self.subTest(fields=fields, generated=generated):
+                    report = self.report(evidence, generated=generated)
+                    item = report["test_evidence"][0]
+                    self.assertEqual(item["evidence_class"], "formal_validation_report")
+                    self.assertEqual(item["binding_status"], "malformed")
+                    self.assertEqual(item["reported_result"], "not_observed")
+                    self.assertFalse(report["report_grants_authority"])
+
+    def test_formal_validation_legacy_success_and_actual_failure_remain_visible(self) -> None:
+        cases = [
+            ({}, "pass"),
+            ({"status": "completed", "timed_out": False, "output_truncated": False}, "pass"),
+            ({"passed": False, "status": "failed"}, "fail"),
+            ({"passed": False, "status": "timed_out", "timed_out": True}, "fail"),
+            ({"passed": False, "status": "output_limit_exceeded", "output_truncated": True}, "fail"),
+            ({"passed": False, "commands": [{"argv": ["fixture-test"], "returncode": 1}]}, "fail"),
+        ]
+        for index, (fields, expected) in enumerate(cases):
+            defaults = {"schema_version": 1, "suite": "authoritative", "passed": True,
+                        "implementation_mode": "candidate",
+                        "commands": [{"argv": ["fixture-test"], "returncode": 0}]}
+            defaults.update(fields)
+            evidence = self.evidence("formal-consistent-" + str(index), **defaults)
+            root = self.report(evidence)
+            self.assertEqual(root, self.report(evidence, generated=True))
+            item = root["test_evidence"][0]
+            self.assertEqual(item["binding_status"], "matched_declared_target")
+            self.assertEqual(item["reported_result"], expected)
+            self.assertEqual(item["formal_admission"], "not_established_by_report")
+            self.assertFalse(root["report_grants_authority"])
+
+
 if __name__ == "__main__":
     unittest.main()

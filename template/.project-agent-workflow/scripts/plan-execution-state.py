@@ -8086,7 +8086,30 @@ def report_retained_evidence(args: argparse.Namespace) -> None:
                 expected_status == "completed" and statuses == [0]
             ) and not (report["passed"] and report.get("failure") is not None)
         if valid and evidence_class == "formal_validation_report":
-            valid = not (report["passed"] and report.get("failure") is not None)
+            # Optional producer fields retain the same failure meanings as
+            # captured results; omitted fields remain valid legacy reports.
+            for flag in ("timed_out", "output_truncated"):
+                if flag in report:
+                    valid = valid and type(report[flag]) is bool
+            if "status" in report:
+                valid = valid and isinstance(report["status"], str) and report["status"] in {
+                    "completed", "failed", "timed_out", "output_limit_exceeded"
+                }
+            declared_failure = (
+                report.get("failure") is not None
+                or report.get("timed_out") is True
+                or report.get("output_truncated") is True
+                or report.get("status") in ("failed", "timed_out", "output_limit_exceeded")
+            )
+            valid = valid and not (report["passed"] and declared_failure)
+            if report.get("status") == "completed":
+                valid = valid and not (
+                    report.get("timed_out") is True or report.get("output_truncated") is True
+                )
+            if report.get("status") == "timed_out" and "timed_out" in report:
+                valid = valid and report["timed_out"] is True
+            if report.get("status") == "output_limit_exceeded" and "output_truncated" in report:
+                valid = valid and report["output_truncated"] is True
         if valid and report.get("passed") is True:
             valid = all(value == 0 for value in statuses)
             if evidence_class == "diagnostic":
