@@ -69,6 +69,47 @@ src=$1
 case "$src" in docs/plan/active/[0-9][0-9][0-9]-*.md) ;; *) echo "expected active plan path" >&2; exit 2 ;; esac
 [ -f "$src" ] || { echo "missing plan: $src" >&2; exit 1; }
 
+# Evidence-only probes and mutations both preserve pending acceptance holds.
+require_assigned_verification() {
+  python3 -B - "$1" "$2" <<'PY_GATE'
+import importlib.util
+import sys
+from pathlib import Path
+
+# Use the same leading-manifest key recognition as the canonical reader.
+# A historical plan with no declaration keeps its existing evidence-only path.
+declared = False
+for raw in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = raw.rstrip()
+    if line.startswith("## "):
+        break
+    if ":" in line and not line.startswith(" "):
+        if line.split(":", 1)[0].strip() == "validation_witness_unassigned":
+            declared = True
+            break
+if not declared:
+    sys.exit(0)
+
+path = Path(sys.argv[2])
+if not path.is_file():
+    print("missing canonical plan verification authority: planlib.py", file=sys.stderr)
+    sys.exit(1)
+spec = importlib.util.spec_from_file_location("completion_plan_verification", path)
+if spec is None or spec.loader is None:
+    print("cannot load canonical plan verification authority", file=sys.stderr)
+    sys.exit(1)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+try:
+    module.require_assigned_verification(module.parse_manifest(Path(sys.argv[1])))
+except module.PlanError as exc:
+    print(str(exc), file=sys.stderr)
+    sys.exit(1)
+PY_GATE
+}
+
+require_assigned_verification "$src" "template/.project-agent-workflow/scripts/planlib.py" || exit 1
+
 if [ "$check_only" -eq 1 ]; then
   completion_evidence "$src" || exit 1
   exit 0

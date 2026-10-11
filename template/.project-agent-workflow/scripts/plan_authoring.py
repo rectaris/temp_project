@@ -1287,8 +1287,14 @@ def render_report(document: dict[str, Any], digest: str, *, next_plan_id: str, p
         f"next-plan-id: {next_plan_id}",
         f"target-path: {plan_path}",
     ]
+    if document.get("validation_witness_unassigned"):
+        lines.append("implementation-admission: blocked (unassigned verification)")
     for index, requirement in enumerate(document["requirements"], start=1):
         lines.append(f"requirement {index} [{requirement['id']}]: {requirement['text']}")
+        pending = any(
+            "unassigned_reason" in document["acceptance_items"][item]
+            for item in requirement["acceptance_items"]
+        )
         for position, identifier in enumerate(requirement["write_paths"], start=1):
             path = document["write_paths"][identifier]["path"]
             lines.append(f"  write-path {position} [{identifier}]: {path}")
@@ -1299,10 +1305,20 @@ def render_report(document: dict[str, Any], digest: str, *, next_plan_id: str, p
             lines.append(f"    condition-sha256: {text_digest(condition['text'])}")
             lines.append(f"    witness-command [{witness['id']}]: {witness['command']}")
             lines.append(f"    claimed-witness-behavior: {witness['claim']}")
+            if pending:
+                lines.append(
+                    "    completion-witness-status: unfulfilled draft; "
+                    "no acceptance evidence while verification is unassigned"
+                )
         for position, identifier in enumerate(requirement["acceptance_items"], start=1):
             item = document["acceptance_items"][identifier]
             lines.append(f"  acceptance-item {position} [{identifier}]: {item['text']}")
             lines.append(f"    acceptance-sha256: {text_digest(item['text'])}")
+            if "unassigned_reason" in item:
+                lines.append("    verification-status: unassigned (not acceptance evidence)")
+                lines.append(f"    unassigned-reason: {item['unassigned_reason']}")
+                lines.append("    witness-command: none (verification remains unassigned)")
+                continue
             if not item["stage"]:
                 lines.append("    witness-command: none (legacy authoring placeholder)")
                 continue
