@@ -11577,5 +11577,240 @@ class ParentDirectPreparationTest(unittest.TestCase):
         self.assertEqual(self.state.read_bytes(), first)
 
 
+class RetainedEvidenceStatusTest(unittest.TestCase):
+    """Synthetic retained fixtures; none claims actual reviewer runtime evidence."""
+
+    setUp = PlanExecutionStateTest.setUp
+    tearDown = PlanExecutionStateTest.tearDown
+    run_cli = PlanExecutionStateTest.run_cli
+    record = PlanExecutionStateTest.record
+    initialize_execution = PlanExecutionStateTest.initialize_execution
+    resource_manifest = PlanExecutionStateTest.resource_manifest
+    write_review_transcript = PlanExecutionStateTest.write_review_transcript
+    review_receipt = PlanExecutionStateTest.review_receipt
+    start_writable_attempt = PlanExecutionStateTest.start_writable_attempt
+    write_applied_lifecycle = PlanExecutionStateTest.write_applied_lifecycle
+    append_candidate_review_fixture = PlanExecutionStateTest.append_candidate_review_fixture
+    close_writable_attempt = PlanExecutionStateTest.close_writable_attempt
+
+    target = digest("retained patch fixture")
+
+    def evidence(self, label: str, **extra: Any) -> Path:
+        payload = {
+            "plan_path": "docs/plan/active/001-test.md",
+            "plan_digest": digest(self.plan.read_bytes()), "source_head": self.head,
+            "candidate_patch_digest": self.target[7:], "argv": ["fixture-test"], "exit": 0,
+        }
+        payload.update(extra)
+        path = self.base / (label + ".json")
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def snapshot(self) -> dict[str, bytes]:
+        return {str(path.relative_to(self.base)): path.read_bytes()
+                for path in self.base.rglob("*") if path.is_file() and not path.is_symlink()}
+
+    def report(self, *paths: Path, generated: bool = False,
+               state: Path | None = None, target: str | None = None) -> dict[str, Any]:
+        before = self.snapshot()
+        script = ROOT / "template/.project-agent-workflow/scripts/plan-execution-state.py" if generated else STATE_SCRIPT
+        args = [sys.executable, str(script), "report-retained-evidence", str(state or self.state),
+                "--target-digest", target or self.target]
+        for path in paths:
+            args.extend(("--evidence", str(path)))
+        result = subprocess.run(args, cwd=self.repo, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.snapshot(), before, "report must not write source, registry or Git bytes")
+        return json.loads(result.stdout)
+
+    def test_test_success_survives_absent_review_with_missing_provenance(self) -> None:
+        receipt = self.evidence("captured-success", stdout="never print this raw body")
+        root = self.report(receipt)
+        self.assertEqual(root, self.report(receipt, generated=True))
+        item = root["test_evidence"][0]
+        self.assertEqual(item["evidence_class"], "captured_test_result")
+        self.assertEqual(item["reported_result"], "pass")
+        self.assertEqual(item["source_digest"], digest(receipt.read_bytes()))
+        self.assertEqual(item["provenance_verification"], "declared_only")
+        for field in ["environment", "input", "expected_outcome", "execution_genesis_digest"]:
+            self.assertIn(field, item["missing_fields"])
+        self.assertEqual(root["reviewer_outcome"]["status"], "not_recorded")
+        self.assertIn("target_clearing_review_not_recorded", root["acceptance_holds"]["missing_evidence"])
+        self.assertEqual(root["acceptance_holds"]["gate_decisions"], "not_evaluated")
+        self.assertFalse(root["report_grants_authority"])
+        self.assertNotIn("never print this raw body", json.dumps(root))
+
+    def test_diagnostic_and_formal_test_reports_keep_their_classes(self) -> None:
+        diagnostic = self.evidence(
+            "diagnostic", schema_version=1, record_type="candidate_preflight_diagnostic",
+            evidence_class="diagnostic", is_validation_evidence=False,
+            status="completed", timed_out=False, output_truncated=False,
+            exit_status=0, passed=True,
+        )
+        validation = self.evidence(
+            "validation", schema_version=1, suite="authoritative", passed=True,
+            implementation_mode="candidate", commands=[{"argv": ["fixture-test"], "returncode": 0}],
+        )
+        report = self.report(diagnostic, validation)
+        self.assertEqual([x["evidence_class"] for x in report["test_evidence"]],
+                         ["diagnostic", "formal_validation_report"])
+        self.assertEqual([x["reported_result"] for x in report["test_evidence"]], ["pass", "pass"])
+        self.assertEqual(report["recorded_validation_for_target"], [])
+        self.assertEqual(report["consumption"]["authoritative_validation_events"], 0)
+        self.assertFalse(report["reviewer_outcome"]["clearing_recorded"])
+        for item in report["test_evidence"]:
+            self.assertEqual(item["formal_admission"], "not_established_by_report")
+
+    def test_review_messages_and_requested_identity_cannot_clear_review(self) -> None:
+        for status in ["interim", "failed", "completed"]:
+            with self.subTest(status=status):
+                evidence = self.evidence("review-" + status, record_type="review_outcome",
+                                         status=status, final_message="REVIEW-VERDICT: none",
+                                         requested_model="requested-only", passed=True)
+                report = self.report(evidence)
+                self.assertEqual(report["test_evidence"], [])
+                raw_review = report["reviewer_outcome"]["unverified_inputs"][0]
+                self.assertEqual(raw_review["binding_status"], "unattributed")
+                self.assertEqual(raw_review["reported_status"], status)
+                self.assertIsNone(raw_review["declared_target_matches"])
+                self.assertEqual(report["reviewer_outcome"]["status"], "not_recorded")
+                self.assertNotIn("requested-only", json.dumps(report))
+        result = self.record("plain-review", "parent_review", "--invariant-digest", digest("one invariant"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.report()["reviewer_outcome"]["status"], "not_recorded")
+
+    def test_stale_missing_wrong_target_and_contradictory_reports_never_pass(self) -> None:
+        invalid = [
+            {"source_head": "0" * 40}, {"plan_digest": digest("another plan")},
+            {"candidate_patch_digest": "0" * 64}, {"execution_genesis_digest": digest("another run")},
+            {"run_id": "another-run"}, {"plan_path": None}, {"candidate_patch_digest": None},
+            {"admitted_diff_digest": digest("conflicting target")}, {"exit": False},
+            {"argv": []}, {"passed": "true"}, {"suite": []}, {"record_type": [], "status": {}},
+            {"status": "failed", "timed_out": True}, {"status": "failed"},
+            {"timed_out": True}, {"output_truncated": True}, {"failure": "assertion failed"},
+            {"timed_out": "true"}, {"output_truncated": 1}, {"status": []},
+            {"status": "completed", "timed_out": True, "passed": False},
+            {"status": "timed_out", "timed_out": False, "exit": -15, "passed": False},
+            {"status": "output_limit_exceeded", "output_truncated": False, "exit": 1},
+            {"exit": 1, "status": "failed", "passed": True},
+            {"schema_version": 1, "suite": "focused", "passed": True, "implementation_mode": "candidate",
+             "commands": [{"argv": ["fixture-test"], "returncode": 1}]},
+            {"schema_version": 1, "record_type": "candidate_preflight_diagnostic",
+             "evidence_class": "formal_validation", "is_validation_evidence": True,
+             "status": "completed", "timed_out": False, "output_truncated": False,
+             "exit_status": 0, "passed": True},
+        ]
+        for index, fields in enumerate(invalid):
+            with self.subTest(fields=fields):
+                item = self.report(self.evidence(f"invalid-{index}", **fields))["test_evidence"][0]
+                self.assertNotEqual(item["reported_result"], "pass")
+                self.assertNotEqual(item["binding_status"], "matched_declared_target")
+
+    def test_failed_and_timed_out_tests_remain_visible_without_acceptance(self) -> None:
+        failed = self.evidence("failed-test", exit=7)
+        timed = self.evidence(
+            "timed", schema_version=1, record_type="candidate_preflight_diagnostic",
+            evidence_class="diagnostic", is_validation_evidence=False, status="timed_out",
+            timed_out=True, output_truncated=False, exit_status=-15, passed=False,
+        )
+        report = self.report(failed, timed)
+        self.assertEqual([x["reported_result"] for x in report["test_evidence"]], ["fail", "fail"])
+        self.assertEqual([x["exit_statuses"] for x in report["test_evidence"]], [[7], [-15]])
+        self.assertFalse(report["report_grants_authority"])
+
+    def test_accepted_correction_does_not_attribute_global_acceptance_to_old_target(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("report-corrected-close")
+        first = "report-candidate-A"
+        result = self.start_writable_attempt(state, lifecycle, run_id, first)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.close_writable_attempt(
+            state, lifecycle, run_id, first, invariant=digest("one invariant"),
+            outcome="correction_requested", reason="evidence_incomplete",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        old_target = digest("patch:" + first)
+        second = "report-candidate-B"
+        result = self.start_writable_attempt(state, lifecycle, run_id, second, kind="correction")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.close_writable_attempt(
+            state, lifecycle, run_id, second, invariant=digest("one invariant"), outcome="accepted",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = self.report(state=state, target=old_target)
+        holds = report["acceptance_holds"]
+        self.assertEqual(holds["execution_state"], "accepted")
+        self.assertEqual(holds["execution_state_scope"], "whole_run")
+        self.assertEqual(holds["target_accepted_closure"], "not_attributed_by_report")
+        self.assertIn("target_accepted_closure_not_attributed", holds["missing_evidence"])
+        self.assertEqual(report["reviewer_outcome"]["status"], "not_recorded")
+        self.assertFalse(report["report_grants_authority"])
+        self.assertEqual(report, self.report(state=state, target=old_target, generated=True))
+
+    def test_malformed_oversized_symlink_fifo_and_duplicate_json_are_bounded(self) -> None:
+        bad = self.base / "bad.json"
+        for value in ['{"duplicate":0,"duplicate":1}', '[1]', '{bad', 'NaN']:
+            with self.subTest(value=value):
+                bad.write_text(value, encoding="utf-8")
+                item = self.report(bad)["test_evidence"][0]
+                self.assertNotEqual(item["reported_result"], "pass")
+        bad.write_bytes(b"x" * (STATE_MODULE.CANDIDATE_MANIFEST_MAX_BYTES + 1))
+        self.assertEqual(self.report(bad)["test_evidence"][0]["binding_status"], "unreadable_or_malformed")
+        link = self.base / "symlink.json"
+        link.symlink_to(self.evidence("link-source"))
+        self.assertEqual(self.report(link)["test_evidence"][0]["binding_status"], "unreadable_or_malformed")
+        fifo = self.base / "fifo"
+        os.mkfifo(fifo)
+        # Exclude the FIFO from snapshot's ordinary-file reads; CLI has a timeout.
+        self.assertEqual(self.report(fifo)["test_evidence"][0]["binding_status"], "unreadable_or_malformed")
+
+    def test_existing_execution_refusal_stop_reasons_and_consumption_are_unchanged(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("report-epoch", require_preflight=True)
+        gate_args = ("check", str(state), "--run-id", run_id, "--operation", "execution",
+                     "--lifecycle-state", str(lifecycle))
+        before = self.run_cli(*gate_args)
+        self.assertNotEqual(before.returncode, 0)
+        report = self.report(self.evidence("epoch-test"), state=state)
+        after = self.run_cli(*gate_args)
+        self.assertEqual((after.returncode, after.stderr), (before.returncode, before.stderr))
+        self.assertFalse(report["report_grants_authority"])
+        result = self.record("drift", "scope_drift", "--invariant-digest", digest("one invariant"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = self.report()
+        self.assertEqual(report["acceptance_holds"]["execution_state"], "replan_required")
+        self.assertEqual(report["acceptance_holds"]["original_stop_reasons"]["replan_reason_codes"], ["scope_drift"])
+        self.assertEqual(report["consumption"]["focused_validation_events"], 0)
+        self.assertEqual(report, self.report(generated=True))
+
+    def test_only_attributed_target_matching_formal_review_is_displayed(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("report-formal", mode="parent_direct")
+        (self.repo / "allowed.txt").write_text("reviewed fixture\n", encoding="utf-8")
+        receipt = self.review_receipt("report-formal", digest(self.plan.read_bytes()), round_value=1)
+        result = self.run_cli(
+            "review", str(state), "--run-id", run_id, "--event-id", "formal-review",
+            "--implementation-mode", "parent_direct", "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
+            "--invariant-digest", digest("one invariant"), "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        review = json.loads(state.read_text())["events"][-1]
+        target = review["review_target_digest"]
+        wrong = self.report(state=state)
+        self.assertEqual(wrong["reviewer_outcome"]["status"], "not_recorded")
+        matched = self.report(state=state, target=target)
+        self.assertTrue(matched["reviewer_outcome"]["clearing_recorded"])
+        self.assertEqual(matched["reviewer_outcome"]["receipt_digest"], digest(receipt.read_bytes()))
+        lifecycle_digest = digest(lifecycle.read_bytes())
+        result = self.run_cli(
+            "record", str(state), "--run-id", run_id, "--event-id", "formal-validation",
+            "--event-type", "authoritative_validation", "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", lifecycle_digest, "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        matched = self.report(state=state, target=target)
+        self.assertEqual(matched["recorded_validation_for_target"][0]["stage"], "authoritative_validation")
+        self.assertEqual(matched["consumption"]["authoritative_validation_events"], 1)
+        self.assertFalse(matched["report_grants_authority"])
+
+
 if __name__ == "__main__":
     unittest.main()
