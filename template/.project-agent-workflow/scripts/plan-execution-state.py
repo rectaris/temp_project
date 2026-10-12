@@ -7870,9 +7870,375 @@ def check_gate_locked(args: argparse.Namespace, state: dict[str, Any]) -> None:
             raise StateError("candidate lifecycle changed after the latest budget event")
 
 
+def report_retained_evidence(args: argparse.Namespace) -> None:
+    """Display retained test_evidence, reviewer_outcome and acceptance_holds.
+
+    Test outcomes in an explicitly supplied report are source declarations,
+    not runtime attestation or formal admission. Only already recorded,
+    attributed review events supply reviewer_outcome. acceptance_holds exposes
+    original stops and missing evidence; it never evaluates or changes a gate.
+    """
+    target = require_digest(args.target_digest, "target digest")
+    if len(args.evidence) > 16:
+        raise StateError("retained reporting accepts at most sixteen evidence files")
+
+    def read_json(path: Path, limit: int) -> tuple[Any, str]:
+        # Nonblocking open prevents a replaced FIFO from hanging this reader.
+        reject_symlink_ancestors(path, include_target=True)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            metadata = os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > limit:
+                raise StateError("retained input is not a bounded regular file")
+            raw = os.read(fd, limit + 1)
+        finally:
+            os.close(fd)
+        if len(raw) > limit:
+            raise StateError("retained input exceeds its size bound")
+
+        def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            value: dict[str, Any] = {}
+            for key, item in pairs:
+                if key in value:
+                    raise StateError("retained input has duplicate JSON keys")
+                value[key] = item
+            return value
+
+        def reject_constant(_value: str) -> Any:
+            raise StateError("retained input has a nonfinite JSON constant")
+
+        def finite_float(value: str) -> float:
+            parsed = float(value)
+            if not math.isfinite(parsed):
+                raise StateError("retained input has an overflowing JSON number")
+            return parsed
+
+        return json.loads(
+            raw, object_pairs_hook=unique_object, parse_constant=reject_constant,
+            parse_float=finite_float,
+        ), digest(raw)
+
+    try:
+        parsed, state_digest = read_json(Path(args.state), EXECUTION_STATE_MAX_BYTES)
+        state = validate_state(parsed)
+    except (OSError, UnicodeError, ValueError, RecursionError, StateError) as exc:
+        raise StateError("retained execution state is unavailable or invalid") from exc
+
+    def display_test(path: Path, index: int) -> dict[str, Any]:
+        view: dict[str, Any] = {
+            "input_index": index, "source_digest": None,
+            "binding_status": "unavailable", "evidence_class": "unknown",
+            "reported_result": "not_observed", "exit_statuses": [],
+            "provenance_verification": "declared_only",
+            "formal_admission": "not_established_by_report",
+        }
+        try:
+            report, view["source_digest"] = read_json(path, CANDIDATE_MANIFEST_MAX_BYTES)
+        except (OSError, UnicodeError, ValueError, RecursionError, StateError):
+            view["binding_status"] = "unreadable_or_malformed"
+            return view
+        if not isinstance(report, dict):
+            view["binding_status"] = "malformed"
+            return view
+        view["missing_fields"] = [
+            key for key in (
+                "plan_path", "plan_digest", "source_head", "run_id",
+                "execution_genesis_digest", "environment", "input", "expected_outcome",
+            ) if key not in report or report[key] is None
+        ]
+        kind = report.get("record_type")
+        suite = report.get("suite")
+        if kind == "candidate_preflight_diagnostic":
+            evidence_class = "diagnostic"
+        elif kind is None and isinstance(suite, str) and suite in {"focused", "authoritative"}:
+            evidence_class = "formal_validation_report"
+        elif kind is None and suite is None and "exit" in report and "argv" in report:
+            evidence_class = "captured_test_result"
+        else:
+            # An interim message or caller-supplied reviewer identity is not a
+            # ledger-attributed final verdict, even if it says "passed".
+            is_review = kind in ("review_outcome", "review_receipt") or (
+                "reviewer_session_digest" in report
+            )
+            view["binding_status"] = "unattributed" if is_review else "unsupported_evidence"
+            if is_review:
+                view["evidence_class"] = "unverified_review_input"
+                declared_target = report.get("review_target_digest")
+                view["declared_target_matches"] = (
+                    declared_target == target if isinstance(declared_target, str)
+                    and DIGEST_RE.fullmatch(declared_target) else None
+                )
+            if isinstance(report.get("status"), str) and report["status"] in {
+                "failed", "interim", "completed", "cancelled", "not_observed"
+            }:
+                view["reported_status"] = report["status"]
+            return view
+        view["evidence_class"] = evidence_class
+        required = ("plan_path", "plan_digest", "source_head")
+        if any(key in view["missing_fields"] for key in required):
+            view["binding_status"] = "incomplete"
+            return view
+        bindings = {key: state[key] for key in required}
+        bindings.update({
+            "run_id": state["run_id"], "execution_genesis_digest": state["genesis_digest"],
+            "implementation_mode": state["implementation_mode"],
+        })
+        if any(key in report and report[key] != value for key, value in bindings.items()):
+            view["binding_status"] = "mismatch"
+            return view
+        targets: list[str] = []
+        if "candidate_patch_digest" in report:
+            value = report["candidate_patch_digest"]
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                view["binding_status"] = "malformed"
+                return view
+            targets.append("sha256:" + value)
+        if "admitted_diff_digest" in report:
+            value = report["admitted_diff_digest"]
+            if not isinstance(value, str) or not DIGEST_RE.fullmatch(value):
+                view["binding_status"] = "malformed"
+                return view
+            targets.append(value)
+        if not targets:
+            view["binding_status"] = "incomplete"
+            view["missing_fields"].append("candidate_patch_digest_or_admitted_diff_digest")
+            return view
+        if any(value != target for value in targets):
+            view["binding_status"] = "mismatch"
+            return view
+        view["target_digest"] = target
+        statuses: list[Any]
+        if evidence_class == "diagnostic":
+            statuses = [report.get("exit_status")]
+            valid = (
+                type(report.get("schema_version")) is int
+                and report["schema_version"] == 1
+                and report.get("evidence_class") == "diagnostic"
+                and report.get("is_validation_evidence") is False
+                and isinstance(report.get("status"), str) and report["status"] in {
+                    "completed", "timed_out", "output_limit_exceeded"
+                }
+                and type(report.get("timed_out")) is bool
+                and type(report.get("output_truncated")) is bool
+                and type(report.get("passed")) is bool
+            )
+        elif evidence_class == "formal_validation_report":
+            commands = report.get("commands")
+            valid = (
+                type(report.get("schema_version")) is int
+                and report["schema_version"] == 1
+                and type(report.get("passed")) is bool
+                and isinstance(commands, list) and 0 < len(commands) <= 64
+                and all(
+                    isinstance(item, dict) and isinstance(item.get("argv"), list)
+                    and bool(item["argv"]) and bool(item["argv"][0])
+                    and all(isinstance(arg, str) for arg in item["argv"])
+                    for item in commands
+                )
+                and report.get("implementation_mode") == state["implementation_mode"]
+            )
+            statuses = [item.get("returncode") for item in commands] if valid else []
+            view["suite"] = suite
+        else:
+            statuses = [report.get("exit")]
+            argv = report.get("argv")
+            valid = isinstance(argv, list) and bool(argv) and bool(argv[0]) and all(
+                isinstance(item, str) for item in argv
+            )
+            if "passed" in report:
+                valid = valid and type(report["passed"]) is bool
+            # These optional captured-result fields have defined meanings;
+            # contradictory failure declarations must never derive a pass.
+            for flag in ("timed_out", "output_truncated"):
+                if flag in report:
+                    valid = valid and type(report[flag]) is bool
+            if "status" in report:
+                valid = valid and isinstance(report["status"], str) and report["status"] in {
+                    "completed", "failed", "timed_out", "output_limit_exceeded"
+                }
+            declared_failure = (
+                report.get("failure") is not None
+                or report.get("timed_out") is True
+                or report.get("output_truncated") is True
+                or report.get("status") in ("failed", "timed_out", "output_limit_exceeded")
+            )
+            if declared_failure:
+                valid = valid and report.get("passed") is not True and (
+                    report.get("exit") != 0 or report.get("passed") is False
+                )
+            if report.get("status") == "completed":
+                valid = valid and not (
+                    report.get("timed_out") is True or report.get("output_truncated") is True
+                )
+            if report.get("status") == "timed_out" and "timed_out" in report:
+                valid = valid and report["timed_out"] is True
+            if report.get("status") == "output_limit_exceeded" and "output_truncated" in report:
+                valid = valid and report["output_truncated"] is True
+        valid = valid and bool(statuses) and all(
+            type(value) is int and -255 <= value <= 255 for value in statuses
+        )
+        if valid and evidence_class == "diagnostic":
+            expected_status = (
+                "timed_out" if report["timed_out"] else "output_limit_exceeded"
+                if report["output_truncated"] else "completed"
+            )
+            valid = report["status"] == expected_status and report["passed"] == (
+                expected_status == "completed" and statuses == [0]
+            ) and not (report["passed"] and report.get("failure") is not None)
+        if valid and evidence_class == "formal_validation_report":
+            # Optional producer fields retain the same failure meanings as
+            # captured results; omitted fields remain valid legacy reports.
+            for flag in ("timed_out", "output_truncated"):
+                if flag in report:
+                    valid = valid and type(report[flag]) is bool
+            if "status" in report:
+                valid = valid and isinstance(report["status"], str) and report["status"] in {
+                    "completed", "failed", "timed_out", "output_limit_exceeded"
+                }
+            declared_failure = (
+                report.get("failure") is not None
+                or report.get("timed_out") is True
+                or report.get("output_truncated") is True
+                or report.get("status") in ("failed", "timed_out", "output_limit_exceeded")
+            )
+            valid = valid and not (report["passed"] and declared_failure)
+            if report.get("status") == "completed":
+                valid = valid and not (
+                    report.get("timed_out") is True or report.get("output_truncated") is True
+                )
+            if report.get("status") == "timed_out" and "timed_out" in report:
+                valid = valid and report["timed_out"] is True
+            if report.get("status") == "output_limit_exceeded" and "output_truncated" in report:
+                valid = valid and report["output_truncated"] is True
+        if valid and report.get("passed") is True:
+            valid = all(value == 0 for value in statuses)
+            if evidence_class == "diagnostic":
+                valid = valid and report["status"] == "completed" and not (
+                    report["timed_out"] or report["output_truncated"]
+                )
+        if not valid:
+            view["binding_status"] = "malformed"
+            return view
+        view["binding_status"] = "matched_declared_target"
+        view["exit_statuses"] = statuses
+        view["reported_result"] = (
+            "pass" if all(value == 0 for value in statuses)
+            and report.get("passed", True) is True else "fail"
+        )
+        return view
+
+    events = state["events"]
+    reviews = [
+        event for event in events if event["event_type"] == "parent_review"
+        and event.get("review_target_digest", "") == target
+        and event["independent_review_receipt_digest"]
+        and event["candidate_lifecycle_digest"]
+    ]
+    review = reviews[-1] if reviews else None
+    clearing = review is not None and not (
+        set(review["finding_severities"]) & {"High", "Medium"}
+    )
+    review_view: dict[str, Any] = {"status": "not_recorded", "clearing_recorded": False}
+    if review is not None:
+        review_view = {
+            "status": "clearing_recorded" if clearing else "findings_recorded",
+            "clearing_recorded": clearing, "event_digest": review["event_digest"],
+            "receipt_digest": review["independent_review_receipt_digest"],
+            "finding_severities": review["finding_severities"],
+            "provenance": "verified_execution_event_chain",
+        }
+    # Candidate reviews bind a stable attempt/manifest/patch identity, while
+    # validation events bind the lifecycle file after its phase/counters change.
+    # Attribute only validations inside that already reviewed candidate attempt;
+    # legacy validations without an attributable attempt remain unassigned.
+    candidate_validation_events: set[str] = set()
+    current_attempt = ""
+    current_candidate: tuple[str, str, str] | None = None
+    reviewed_candidate = (
+        (review["attempt_id"], review["candidate_digest"], target)
+        if review is not None and review["implementation_mode"] == "candidate"
+        else None
+    )
+    for event in events:
+        kind = event["event_type"]
+        if kind == "writable_attempt_started":
+            current_attempt = event["attempt_id"]
+            current_candidate = None
+        elif kind in {"attempt_closed", "candidate_generation", "correction_rejected"}:
+            current_candidate = None
+            if kind == "attempt_closed":
+                current_attempt = ""
+        elif kind == "parent_review" and event.get("review_target_digest"):
+            current_candidate = (
+                (event["attempt_id"], event["candidate_digest"], event["review_target_digest"])
+                if event["implementation_mode"] == "candidate"
+                and event["attempt_id"] == current_attempt else None
+            )
+        elif kind in {"focused_validation", "authoritative_validation"}:
+            if reviewed_candidate is not None and current_candidate == reviewed_candidate:
+                candidate_validation_events.add(event["event_digest"])
+    validations = [
+        {"event_digest": event["event_digest"], "stage": event["event_type"]}
+        for event in events if event["event_type"] in {
+            "focused_validation", "authoritative_validation"
+        } and review is not None and (
+            event["event_digest"] in candidate_validation_events
+            if review["implementation_mode"] == "candidate"
+            else event["candidate_lifecycle_digest"] == review["candidate_lifecycle_digest"]
+        )
+    ]
+    missing = []
+    if not clearing:
+        missing.append("target_clearing_review_not_recorded")
+    if not any(item["stage"] == "authoritative_validation" for item in validations):
+        missing.append("target_authoritative_validation_not_attributed")
+    # The ledger state belongs to its whole run, not automatically to this
+    # queried patch. This consumer does not admit or attribute an accepted close.
+    if state["state"] == "accepted":
+        missing.append("target_accepted_closure_not_attributed")
+    supplied = [display_test(Path(path), index) for index, path in enumerate(args.evidence)]
+    review_view["unverified_inputs"] = [
+        item for item in supplied if item["evidence_class"] == "unverified_review_input"
+    ]
+    report = {
+        "schema_version": 1, "read_only": True, "target_digest": target,
+        "execution_state_digest": state_digest,
+        "execution": {key: state[key] for key in (
+            "run_id", "plan_path", "plan_digest", "source_head", "genesis_digest"
+        )},
+        "test_evidence": [
+            item for item in supplied if item["evidence_class"] != "unverified_review_input"
+        ],
+        "reviewer_outcome": review_view,
+        "recorded_validation_for_target": validations,
+        "acceptance_holds": {
+            "execution_state": state["state"], "execution_state_scope": "whole_run",
+            "target_accepted_closure": "not_attributed_by_report",
+            "original_stop_reasons": {key: state[key] for key in (
+                "repair_reason_codes", "replan_reason_codes", "descope_reason_codes",
+                "descope_pending_reason_codes", "review_reason_codes",
+            )},
+            "missing_evidence": missing, "gate_decisions": "not_evaluated",
+            "completion": "not_evaluated", "shipment_or_adoption": "not_observed",
+        },
+        "consumption": {key: state[key] for key in (
+            "candidate_generations", "correction_rounds", "parent_direct_remediation_rounds",
+            "focused_validation_events", "authoritative_validation_events",
+            "writable_attempt_starts", "writable_attempt_closures",
+        )},
+        "report_grants_authority": False,
+    }
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser()
     sub = root.add_subparsers(dest="command", required=True)
+    retained = sub.add_parser("report-retained-evidence", help="read-only test, review and acceptance evidence for one retained patch target")
+    retained.add_argument("state")
+    retained.add_argument("--target-digest", required=True)
+    retained.add_argument("--evidence", action="append", default=[], help="explicit retained diagnostic/validation/captured-test JSON; never admitted by this report")
+    retained.set_defaults(handler=report_retained_evidence)
     registry_init = sub.add_parser("registry-init")
     registry_init.add_argument("--output", required=True)
     registry_init.set_defaults(handler=initialize_reviewer_registry)

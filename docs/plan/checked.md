@@ -303,3 +303,5 @@ id	path
 423	docs/plan/checked/2026/09/16-31/423-run-sandboxed-python-helpers-from-a-reachable-interpreter.md
 386	docs/plan/checked/2026/09/16-31/386-compare-named-run-configurations-with-pinned-policy-digest.md
 416	docs/plan/checked/2026/09/16-31/416-freeze-evaluation-experiments-before-execution.md
+392	docs/plan/checked/2026/10/01-15/392-preserve-unassigned-backlog-verification.md
+389	docs/plan/checked/2026/10/01-15/389-report-retained-test-review-acceptance.md
