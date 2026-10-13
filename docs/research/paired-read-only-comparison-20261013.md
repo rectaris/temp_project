@@ -36,14 +36,14 @@ Codexの一時認証コピーは実行後に削除した。
 
 ## 全件の結果
 
-| 実行 | 課題 | 構成 | 終了状態 | 独立採点 | 秒 |
+| 実行 | 課題 | 構成 | 終了分類（括弧内は原記録） | 独立採点 | 秒 |
 | --- | --- | --- | --- | --- | ---: |
 | 001 | callers | Codex | completed | pass | 19.2 |
 | 002 | callers | Go | failed：tool_error | fail | 5.5 |
 | 003 | guarantees | Codex | completed | fail | 21.3 |
 | 004 | guarantees | Go | timed_out | fail | 60.1 |
 | 005 | callers | Go | failed：tool_error | fail | 3.8 |
-| 006 | callers | Codex | failed：turn_failed | fail | 21.4 |
+| 006 | callers | Codex | model_unavailable（failed：turn_failed） | fail | 21.4 |
 | 007 | guarantees | Go | timed_out | fail | 60.1 |
 | 008 | guarantees | Codex | timed_out | fail | 60.0 |
 
@@ -56,9 +56,13 @@ Codexの実行003は正常終了し、有効な回答形式と必要な未知事
 
 ### 動的実行の観測
 
-Codexは正常終了2件、失敗1件、タイムアウト1件だった。
+Codexは正常終了2件、モデルの一時的な利用不可1件、タイムアウト1件だった。
 Goはtool_errorによる失敗2件、タイムアウト2件だった。
 Codexの実行006には `Selected model is at capacity. Please try a different model.` が記録されている。
+容量不足のため選択したモデルを一時的に使えないという内容であり、Plan418の利用不可分類に照らして、この報告では `model_unavailable` と分類する。
+固定した評価器はその文言を利用不可として認識せず、`failed：turn_failed` を保存した。
+保存済みの8実行、独立採点、比較結果とそのhashは変更せず、表では原記録との差を示した。
+評価器の分類修正や比較の再実行は、この文書修正には含めない。
 別モデルへの切替や再実行は行っていない。
 Goのtool_errorには、どの操作が失敗したかを確定できる読取り履歴が保存されておらず、原因は未確定のまま残す。
 
@@ -98,7 +102,9 @@ OpenCodeのruntime確認は4/4。
 
 生の実行記録は `.agent-artifacts/` にローカル保存し、公開しない。
 自動redactionの報告は `pending_review` のままであり、記録全体を公開可能とは認定していない。
-内容確認と実行方法の調査に読取り専用SDK scoutを2件使い、入力のhash確認、実行、採点、判定は主セッションが所有した。
+読取り専用の補助担当2名が、比較入力6ファイルの内容確認と、既存評価機能による実行・採点・比較の方法調査をそれぞれ行った。
+後者はCLI版の固定、隔離環境、設定と資格情報の取扱いを調べ、実行はしていない。
+両担当の変更権限はなく、主セッションが原本とhashを照合して助言を採用し、実行、独立採点、最終判断を行った。
 これらの調査出力やGoの補助実行は正式レビューの受領記録ではない。
 
 ## 次の処理への境界
