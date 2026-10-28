@@ -1,6 +1,6 @@
 # Separate explicit initial-copy validation from fail-closed updates
 
-status: in_progress
+status: checked
 primary_invariant: Only an explicitly requested fresh non-Git Copier copy may omit committed ownership checks after strict absence proof; ordinary and before-update validation require the exact-root repository, and later Git errors, reserved metadata or unknown observations never waive preservation checks.
 task_types:
   - template_workflow
@@ -80,10 +80,10 @@ checked_summary_ja: 初回コピーを明示し更新時のGit検査を免除し
 
 ## Tasks
 
-- [ ] Publish this exact checked authored plan before implementation; keep every previously deferred item deferred.
-- [ ] Port the explicit-copy producer and consumers in the exact mirrored scope, adapt meaningful regression coverage to the public harness, and prove the actual initial-copy success and default/update refusal before updating documentation.
-- [ ] Update current root/generated explanations and changelog, then obtain independent exact-target clearance and run every declared focused and authoritative command unchanged in the task checkout locked environment.
-- [ ] Commit and archive only on actual acceptance, publish the exact accepted tip locally with task checkout/branch absent, perform fresh GitHub startup/prepublication checks, push the scoped branch, create its PR and inspect real CI without merging.
+- [x] Publish this exact checked authored plan before implementation; keep every previously deferred item deferred.
+- [x] Port the explicit-copy producer and consumers in the exact mirrored scope, adapt meaningful regression coverage to the public harness, and prove the actual initial-copy success and default/update refusal before updating documentation.
+- [x] Update current root/generated explanations and changelog, then obtain independent exact-target clearance and run every declared focused and authoritative command unchanged in the task checkout locked environment.
+- [x] Commit and archive only on actual acceptance, publish the exact accepted tip locally with task checkout/branch absent, perform fresh GitHub startup/prepublication checks, push the scoped branch, create its PR and inspect real CI without merging.
 
 ## Validation Notes
 
@@ -92,3 +92,14 @@ checked_summary_ja: 初回コピーを明示し更新時のGit検査を免除し
 - Accepted source b70fed2 uses a later test helper and a different ownership inventory pin; neither is a prerequisite of this port. Do not copy its historical audit or whole-file later history. Supplied old acceptance does not establish acceptance of this target.
 - Plan388 corrected target caaaef703e99dfb9d3ec7f0c84b2065c2f915d796f7b1d1e06bddd28accec90d remains preserved in stash0515443366840b3e496284e1db361e8ab00c1ed3 and an external full patch, after requirement-preserving deferral commit665472b786c8cdd4a2a50e8f8e31172b21fe8910. Its product worktree/branch were retired; no product acceptance was claimed.
 - Orca advisory coordinators have empty write scopes and their completed tabs are closed. Native reviewer outputs used for source assessment remain advisory, with unobserved session/model properties explicit; no fabricated legacy or schema8 formal receipt is admitted. Main owns every permission, scope, validation, lifecycle, commit and external effect.
+- Authored plan ed7897d2900d99af768e130e54b581de783f1e34 was normally published before implementation. Parent accepted only the seven-path product target sha256:46188da0c198afa2ecccffa6aadd993016447d4c91138698cbc8b8622421e02f; the public ownership pin and all update consumers remained intact.
+- Actual CLI regression proof: the 11 new repository-context cases passed; the complete `uv run --locked python3 tests/test-copier-migration.py` run then passed all 51 tests in 12.38 seconds. `uv run --locked tests/copier-update.sh --require-copier` passed in 122.86 seconds, exercising actual generated fresh-copy and update validators.
+- Unchanged authoritative commands passed in the product task's own locked environment: `uv run --locked scripts/lint-project-workflow.sh` exited0 in 317.41 seconds and `uv run --locked tests/smoke.sh` exited0 in 110.49 seconds. Original mode-0600 outputs and result records remain under pr-505-506-publication-20261028/copy401-001-{focused,authoritative}-{1,2}.
+- A new independent native source assessment inspected the exact target and reported `REVIEW-VERDICT: none`. Its actual CLI session digest sha256:295b297f49dcf17c4abdf4cdde0d0de8a96313031992f87495c87d98f6d3d227 was admitted once as canonical registry event123. The bounded source record is sha256:6f232c8f0ebc680a9a499aa4db8ed84bd4f3f81383f1c8612e2dbb8c66b8b29f; named-profile/provider-model execution and inheritance-hook proof remain unobserved. This is first-installation source evidence, not a fabricated normal schema8 receipt.
+- The first request-file admission refused mode0664 before capability selection or native execution. Original bytes were retained without chmod or capture copying; the parent rechecked maintained source and generated new records with the accepted exclusive mode-0600 writer. The same native run identity was retained and no review history or counter was reset.
+- Product commit1c5a327a448b5eba2b43a33f62ff57b0a998d942 was normally published to refs/heads/rectaris/pr-copier-initial-copy-validation; its task checkout and temporary plan branch were removed. Fresh GitHub startup/prepublication checks covered every actual public-base diff path and known required asset, reported checked with no blockers or changed facts, and were recaptured after the ordinary branch push rather than reused across that effect.
+- Dedicated PR https://github.com/rectaris/temp_project/pull/41 targets dev from rectaris/pr-copier-initial-copy-validation. It contains only this prerequisite and its own necessary lifecycle history; private dev history, held input-bundle product and PR24 were not published or modified.
+- Actual CI https://github.com/rectaris/temp_project/actions/runs/40683566160 attempt1 completed successfully for product head1c5a327a448b5eba2b43a33f62ff57b0a998d942 and public baseb1eae00c7a60f2d5dca3a37f64bfa1b656537a26. All six jobs succeeded: validate, copier-fixture-validator, sandboxed-plan-worker, plan-execution-state, minimum-compatibility and plan-restructure. Original before/run/jobs/after API captures establish unchanged head/base; see copy401-ci001-coherent-observation.json.
+- Existing CI notices concern Node20 action runtimes and the ubuntu-latest image transition; they were not failures and this change does not alter unrelated workflows. No GitHub review approval, merge, release or operational controller adoption is claimed.
+- A separate Tier0 direct task records this truthful post-PR lifecycle closeout; the product plan remains Tier2 with unchanged acceptance and validation authority. Its metadata publication and any newly triggered CI are distinct from the already observed product-head CI.
+- Plan388 and public418 remain deferred. Requirements, corrected held candidate, original findings, source478 refusal and unknown historical consumption remain preserved; completing this prerequisite does not accept their products or authorize a stopped execution to resume.
