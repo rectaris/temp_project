@@ -8,6 +8,7 @@ the same OS user. Native registration and member admission belong to integration
 from __future__ import annotations
 
 import argparse
+import errno
 import fcntl
 import hashlib
 import json
@@ -192,9 +193,12 @@ def _local_processes() -> ModuleType:
 
 
 def git(repo: Path, *args: str) -> bytes:
+    runtime = _local_processes()
     try:
-        completed = _local_processes().immutable_git_capture(
+        completed = runtime.immutable_git_capture(
             repo, *args, timeout=60, limit=MAX_FILE, keep_stderr=False)
+    except runtime.GitCapabilityError as error:
+        raise AuthorityError(str(error)) from error
     except (OSError, RuntimeError) as error:
         raise AuthorityError("accepted repository Git query refused") from error
     if completed.returncode:
@@ -706,13 +710,36 @@ def materialize(repo: Path, destination: Path, commit: str, accepted_ref: str, o
         external_destination(repo, path)
     # A retained lock is inert but must keep its identity; never unlink it.
     plain_path(lock_path, exists=False)
-    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    created_lock = False
+    try:
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        if any(path.exists() for path in (
+                intent_path, stage, destination, intent_path.with_name(intent_path.name + ".next"))):
+            raise AuthorityError("bound authority operation lock is missing; recreation is closed")
+        try:
+            lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            created_lock = True
+        except FileExistsError:
+            lock_fd = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW)
     with os.fdopen(lock_fd, "r+") as lock:
         info = os.fstat(lock.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600:
             raise AuthorityError("invalid parent authority operation lock")
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        request = {"schema_version": SCHEMA, "destination": str(destination), "stage": str(stage), "manifest_digest": manifest_digest, "operation_id": operation_id, "repository": identity}
+        path_info = lock_path.lstat()
+        if (not stat.S_ISREG(path_info.st_mode) or path_info.st_uid != os.getuid()
+                or path_info.st_nlink != 1 or stat.S_IMODE(path_info.st_mode) != 0o600
+                or (path_info.st_dev, path_info.st_ino) != (info.st_dev, info.st_ino)):
+            raise AuthorityError("authority operation lock identity or custody changed")
+        next_path = intent_path.with_name(intent_path.name + ".next")
+        if next_path.exists():
+            raise FileExistsError(errno.EEXIST, "retained authority intent update is ambiguous", str(next_path))
+        request = {
+            "schema_version": SCHEMA, "destination": str(destination), "stage": str(stage),
+            "manifest_digest": manifest_digest, "operation_id": operation_id, "repository": identity,
+            "lock_identity": {"device": info.st_dev, "inode": info.st_ino},
+        }
         if intent_path.exists():
             intent = read_record(intent_path)
             if (set(intent) != {"request", "stage_identity", "state"}
@@ -721,8 +748,8 @@ def materialize(repo: Path, destination: Path, commit: str, accepted_ref: str, o
                     or intent["state"] not in {"prepared", "published"}):
                 raise AuthorityError("foreign or different-operation authority intent is retained")
         else:
-            if destination.exists() or stage.exists():
-                raise AuthorityError("unclassified existing authority destination is retained")
+            if not created_lock or destination.exists() or stage.exists():
+                raise AuthorityError("unbound or unclassified authority operation state is retained")
             intent = {"request": request, "stage_identity": None, "state": "prepared"}
             write_new(intent_path, canonical(intent))
             sync_directory(destination.parent)

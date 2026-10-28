@@ -1,6 +1,7 @@
 """Accepted-bundle identity, recovery and fixed-import regression tests."""
 
 from __future__ import annotations
+from contextlib import chdir
 
 import os
 import json
@@ -217,6 +218,56 @@ class ParentAuthorityTest(unittest.TestCase):
         self.assertEqual(self.materialize(), result)
         self.assertEqual((self.bundle / "tree/policy.txt").read_text(), "fixed policy\n")
 
+    def test_relative_repository_query_selects_the_same_commit(self) -> None:
+        runtime = self.module._local_processes()
+        with chdir(self.base):
+            result = runtime.immutable_git_capture(Path("repo"), "rev-parse", "HEAD")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.decode().strip(), self.commit)
+
+    def test_unsupported_git_capability_never_falls_back_to_an_unprotected_query(self) -> None:
+        runtime = self.module._local_processes()
+        executable = self.base / "older-git"
+        marker = self.base / "unprotected-query-started"
+        executable.write_text(
+            f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
+            "if '--no-lazy-fetch' in sys.argv:\n    sys.exit(129)\n"
+            f"Path({str(marker)!r}).write_text('unprotected')\n")
+        executable.chmod(0o700)
+        with patch.object(runtime.shutil, "which", return_value=str(executable)):
+            with self.assertRaises(runtime.GitCapabilityError):
+                runtime.immutable_git_capture(self.repo, "rev-parse", "--git-dir")
+        self.assertFalse(marker.exists())
+
+    def test_capability_probe_shares_the_original_query_deadline(self) -> None:
+        runtime = self.module._local_processes()
+        executable = self.base / "slow-git"
+        query_finished = self.base / "initial-query-finished"
+        probe_started = self.base / "capability-probe-started"
+        overrun = self.base / "probe-exceeded-original-deadline"
+        executable.write_text(
+            f"#!{sys.executable}\nimport sys,time\nfrom pathlib import Path\n"
+            "if '--version' in sys.argv:\n"
+            f"    Path({str(probe_started)!r}).touch()\n"
+            "    time.sleep(1.5)\n"
+            f"    Path({str(overrun)!r}).touch()\n"
+            "    sys.exit(0)\n"
+            "time.sleep(1)\n"
+            f"Path({str(query_finished)!r}).touch()\n"
+            "sys.exit(129)\n")
+        executable.chmod(0o700)
+        with patch.object(runtime.shutil, "which", return_value=str(executable)):
+            with self.assertRaises(runtime.CommandError):
+                runtime.immutable_git_capture(self.repo, "fixture-refusal", timeout=2)
+        self.assertTrue(query_finished.exists())
+        self.assertTrue(probe_started.exists())
+        self.assertFalse(overrun.exists())
+
+    def test_capable_git_keeps_malformed_query_status(self) -> None:
+        runtime = self.module._local_processes()
+        result = runtime.immutable_git_capture(self.repo, "--offline-fixture-invalid-option")
+        self.assertEqual(result.returncode, 129)
+
     def test_immutable_inventory_ignores_replacements_and_unrelated_worktree_executors(self) -> None:
         original = self.git("rev-parse", f"{self.commit}:policy.txt")
         replacement = self.base / "replacement"
@@ -346,6 +397,77 @@ class ParentAuthorityTest(unittest.TestCase):
         result = self.materialize()
         self.verify(result)
         self.assertTrue((self.base / ".bundle.authority-intent.json").exists())
+
+    def test_missing_bound_lock_is_not_recreated_during_recovery(self) -> None:
+        self.materialize()
+        lock_path = self.base / ".bundle.authority-lock"
+        intent_path = self.base / ".bundle.authority-intent.json"
+        manifest = self.bundle / "manifest.json"
+        before = (intent_path.read_bytes(), manifest.read_bytes())
+        with lock_path.open("rb") as held:
+            self.module.fcntl.flock(held.fileno(), self.module.fcntl.LOCK_EX)
+            lock_path.unlink()
+            with self.assertRaises(self.module.AuthorityError):
+                self.materialize()
+            self.assertFalse(lock_path.exists())
+            self.assertEqual((intent_path.read_bytes(), manifest.read_bytes()), before)
+
+    def test_substituted_bound_lock_cannot_split_recovery_exclusion(self) -> None:
+        self.materialize()
+        lock_path = self.base / ".bundle.authority-lock"
+        retained = self.base / "retained-original-lock"
+        intent_path = self.base / ".bundle.authority-intent.json"
+        manifest = self.bundle / "manifest.json"
+        before = (intent_path.read_bytes(), manifest.read_bytes())
+        with lock_path.open("rb") as held:
+            self.module.fcntl.flock(held.fileno(), self.module.fcntl.LOCK_EX)
+            lock_path.rename(retained)
+            self.module.write_new(lock_path, b"")
+            replacement_identity = (lock_path.stat().st_dev, lock_path.stat().st_ino)
+            with self.assertRaises(self.module.AuthorityError):
+                self.materialize()
+            self.assertEqual((lock_path.stat().st_dev, lock_path.stat().st_ino), replacement_identity)
+            self.assertEqual((retained.stat().st_dev, retained.stat().st_ino),
+                             (os.fstat(held.fileno()).st_dev, os.fstat(held.fileno()).st_ino))
+            self.assertEqual((intent_path.read_bytes(), manifest.read_bytes()), before)
+
+    def test_unbound_lock_and_orphaned_next_are_retained_without_new_operation_state(self) -> None:
+        for orphaned_next in (False, True):
+            with self.subTest(orphaned_next=orphaned_next):
+                self.bundle = self.base / ("unbound-" + str(orphaned_next))
+                prefix = "." + self.bundle.name + ".authority"
+                lock_path = self.base / (prefix + "-lock")
+                intent_path = self.base / (prefix + "-intent.json")
+                next_path = intent_path.with_name(intent_path.name + ".next")
+                self.module.write_new(lock_path, b"retained unbound lock")
+                if orphaned_next:
+                    self.module.write_new(next_path, b"retained unknown next record")
+                with lock_path.open("rb") as held:
+                    before = (os.fstat(held.fileno()).st_dev, os.fstat(held.fileno()).st_ino)
+                    with self.assertRaises((self.module.AuthorityError, OSError)):
+                        self.materialize(operation="different-request")
+                    self.assertFalse(intent_path.exists())
+                    self.assertFalse((self.base / (prefix + "-stage")).exists())
+                    self.assertFalse(self.bundle.exists())
+                    self.assertEqual((lock_path.stat().st_dev, lock_path.stat().st_ino), before)
+                    self.assertEqual(lock_path.read_bytes(), b"retained unbound lock")
+                    if orphaned_next:
+                        self.assertEqual(next_path.read_bytes(), b"retained unknown next record")
+
+    def test_bound_intent_with_orphaned_next_cannot_create_a_stage(self) -> None:
+        with patch.object(self.module.Path, "mkdir", side_effect=OSError("stage creation interruption")):
+            with self.assertRaises(OSError):
+                self.materialize()
+        intent_path = self.base / ".bundle.authority-intent.json"
+        next_path = intent_path.with_name(intent_path.name + ".next")
+        before = intent_path.read_bytes()
+        self.module.write_new(next_path, b"retained interrupted intent update")
+        with self.assertRaises((self.module.AuthorityError, OSError)):
+            self.materialize()
+        self.assertFalse((self.base / ".bundle.authority-stage").exists())
+        self.assertFalse(self.bundle.exists())
+        self.assertEqual(intent_path.read_bytes(), before)
+        self.assertEqual(next_path.read_bytes(), b"retained interrupted intent update")
 
     def test_corrupted_staging_is_never_repaired_or_deleted(self) -> None:
         with patch.object(self.module.os, "rename", side_effect=OSError("fixture interruption")):

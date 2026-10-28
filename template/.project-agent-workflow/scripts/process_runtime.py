@@ -21,6 +21,10 @@ class CommandError(RuntimeError):
     """A local query could not finish within its declared process bounds."""
 
 
+class GitCapabilityError(CommandError):
+    """The trusted system Git lacks a required offline-read capability."""
+
+
 class Captured(NamedTuple):
     returncode: int
     stdout: bytes
@@ -57,6 +61,7 @@ def immutable_git_capture(repository, *arguments, timeout=60, data=None,
     executable = shutil.which("git", path=os.defpath)
     if executable is None:
         raise CommandError("trusted system Git is unavailable")
+    repository = os.path.abspath(repository)
     environment = local_environment()
     environment.update({
         "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_SYSTEM": os.devnull,
@@ -65,7 +70,8 @@ def immutable_git_capture(repository, *arguments, timeout=60, data=None,
         "GIT_GRAFT_FILE": os.devnull, "GIT_ATTR_NOSYSTEM": "1",
         "GIT_TERMINAL_PROMPT": "0",
     })
-    return capture(
+    deadline = time.monotonic() + timeout
+    result = capture(
         [executable, "--no-lazy-fetch", "-c", "core.fsmonitor=false",
          "-c", f"core.hooksPath={os.devnull}", "-c", "credential.helper=",
          "-c", "core.askPass=", "-c", "protocol.allow=never",
@@ -73,6 +79,20 @@ def immutable_git_capture(repository, *arguments, timeout=60, data=None,
         cwd=repository, env=environment, timeout=timeout, data=data,
         limit=limit, stderr_limit=stderr_limit, keep_stderr=keep_stderr,
         description="immutable Git query")
+    if result.returncode == 129:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise CommandError("system Git capability check exceeded the query deadline")
+        capability = capture(
+            [executable, "--no-lazy-fetch", "--version"],
+            cwd=repository, env=environment, timeout=remaining,
+            limit=4096, keep_stderr=False, description="system Git capability check")
+        if capability.returncode:
+            raise GitCapabilityError(
+                "trusted system Git must support --no-lazy-fetch; "
+                "upgrade Git on the system search path (os.defpath); "
+                "unprotected repository queries are not permitted")
+    return result
 
 
 def wait_unreaped(process: subprocess.Popen, deadline: float) -> None:

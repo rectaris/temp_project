@@ -477,6 +477,10 @@ The manifest binds the canonical repository identity, accepted commit/ref, opera
 
 An exact same-operation retry may recover a recognized intact stage or verify an existing published bundle. A foreign destination, changed source or operation, corrupted bytes, unsafe file type or alias, or missing previously bound state refuses. Preserve the retained bundle, intent, stage and lock; never delete or repair unknown state to make a retry pass.
 
+The operation intent binds the lock device/inode identity. Recovery rechecks the locked descriptor against the current path and the retained intent; a missing or substituted lock refuses without recreation. An existing intent without this binding is retained and refused, never supplemented from the current lock.
+
+Only the invocation that exclusively creates a fresh lock may create its first intent. A pre-existing lock without a valid bound intent, or an orphaned `.next` intent update, remains unknown state. Refuse before creating or supplementing any intent, stage or destination; do not adopt the retained lock for another operation.
+
 `launch-contract` verifies the same inputs and returns a fixed Python entrypoint, inventory-only file arguments and a bundle-root working directory. It does not run the returned command:
 
 ```sh
@@ -489,3 +493,5 @@ An exact same-operation retry may recover a recognized intact stage or verify an
 Every operation retains `member_write_admitted: false`; a launch contract also retains `execution_authorized: false`. Standard-library closure and a member-excluded native entrypoint remain unverified blocking requirements. Filesystem ownership and modes establish observed identities, not a sandbox against another process using the same operating-system account. Source installation supplies none of those missing guarantees or any operational adoption.
 
 Physical placement currently requires Linux mount/descriptor observations on supported ext4, xfs or tmpfs views, and local child custody requires POSIX `waitid(WNOWAIT)`. Missing or ambiguous host capabilities refuse rather than weakening placement, reading from a mutable candidate, or selecting a different execution path.
+
+Immutable queries require a system Git executable on `os.defpath` that supports `--no-lazy-fetch`; Git 2.43 does not satisfy this prerequisite. A newer Git found only on the caller's `PATH` is not selected. An option-usage refusal triggers a bounded capability check and an actionable prerequisite diagnostic, never a retry without the offline protection. Relative repository paths are made absolute once before they are supplied to both the child working directory and Git's `-C`.

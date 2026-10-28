@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -56,7 +57,7 @@ def main() -> None:
         git_query("commit", "-qm", "Accept offline fixture")
         commit = git_query("rev-parse", "HEAD")
         bundle = base / "bundle"
-        common = ["--repository", str(repository), "--bundle", str(bundle),
+        common = ["--repository", repository.name, "--bundle", str(bundle),
                   "--accepted-commit", commit, "--accepted-ref", "refs/heads/accepted"]
 
         def invoke(operation: str, *arguments: str, refused: bool = False) -> dict:
@@ -108,6 +109,59 @@ def main() -> None:
                for field in ("stdlib_closure_verified", "native_entrypoint_verified")):
             raise AssertionError("unverified execution capabilities became verified")
 
+        for case in ("missing", "substituted"):
+            target = base / ("lock-" + case)
+            selected = ["--repository", repository.name, "--bundle", str(target),
+                        "--accepted-commit", commit, "--accepted-ref", "refs/heads/accepted"]
+            invoke("materialize", *selected, "--operation-id", "offline-lock")
+            lock_path = base / ("." + target.name + ".authority-lock")
+            intent_path = base / ("." + target.name + ".authority-intent.json")
+            retained_lock = base / ("retained-lock-" + case)
+            before = (intent_path.read_bytes(), (target / "manifest.json").read_bytes())
+            with lock_path.open("rb") as held:
+                fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+                lock_path.rename(retained_lock)
+                if case == "substituted":
+                    fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    os.close(fd)
+                    replacement = (lock_path.stat().st_dev, lock_path.stat().st_ino)
+                invoke("materialize", *selected, "--operation-id", "offline-lock", refused=True)
+                if case == "missing" and lock_path.exists():
+                    raise AssertionError("a missing bound lock was recreated")
+                if case == "substituted" and (
+                        lock_path.stat().st_dev, lock_path.stat().st_ino) != replacement:
+                    raise AssertionError("a substituted lock was repaired or replaced")
+                if (intent_path.read_bytes(), (target / "manifest.json").read_bytes()) != before:
+                    raise AssertionError("refused lock recovery changed retained operation bytes")
+                if (retained_lock.stat().st_dev, retained_lock.stat().st_ino) != (
+                        os.fstat(held.fileno()).st_dev, os.fstat(held.fileno()).st_ino):
+                    raise AssertionError("refused recovery changed the held original lock")
+
+        for case in ("lock-only", "orphaned-next"):
+            target = base / case
+            prefix = "." + target.name + ".authority"
+            lock_path = base / (prefix + "-lock")
+            intent_path = base / (prefix + "-intent.json")
+            next_path = intent_path.with_name(intent_path.name + ".next")
+            with os.fdopen(os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stream:
+                stream.write(b"retained unbound lock")
+            if case == "orphaned-next":
+                with os.fdopen(os.open(next_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stream:
+                    stream.write(b"retained unknown next record")
+            selected = ["--repository", repository.name, "--bundle", str(target),
+                        "--accepted-commit", commit, "--accepted-ref", "refs/heads/accepted"]
+            with lock_path.open("rb") as held:
+                original_identity = (os.fstat(held.fileno()).st_dev, os.fstat(held.fileno()).st_ino)
+                invoke("materialize", *selected, "--operation-id", "different-operation", refused=True)
+                if intent_path.exists() or (base / (prefix + "-stage")).exists() or target.exists():
+                    raise AssertionError("an unbound retained operation gained new state")
+                if (lock_path.stat().st_dev, lock_path.stat().st_ino) != original_identity:
+                    raise AssertionError("an unbound retained lock changed identity")
+                if lock_path.read_bytes() != b"retained unbound lock":
+                    raise AssertionError("an unbound retained lock changed bytes")
+                if case == "orphaned-next" and next_path.read_bytes() != b"retained unknown next record":
+                    raise AssertionError("an orphaned intent update changed bytes")
+
         damaged = bundle / "tree/policy.txt"
         original_mode = stat.S_IMODE(damaged.stat().st_mode)
         damaged.chmod(0o600)
@@ -122,6 +176,9 @@ def main() -> None:
             raise AssertionError("a refused input operation ran the captured entrypoint")
         print(json.dumps({"cli": str(command), "accepted_commit": commit,
                           "manifest_digest": pin, "corruption_refused_and_retained": True,
+                          "relative_repository_verified": True,
+                          "missing_and_substituted_locks_refused": True,
+                          "unbound_operations_refused_and_retained": True,
                           "execution_authorized": False, "member_write_admitted": False},
                          sort_keys=True))
 
