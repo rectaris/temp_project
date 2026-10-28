@@ -1,6 +1,6 @@
 # Publish bounded advisory scope correspondence and Python import observations
 
-status: in_progress
+status: checked
 primary_invariant: The explicit scope diagnostic reads only bounded declared data, preserves unknowns and grants no write, validation, execution or acceptance authority; ordinary authoring stays unchanged.
 task_types:
   - template_workflow
@@ -92,11 +92,11 @@ checked_summary_ja: 宣言済みの変更範囲について、登録対応とPyt
 
 ## Tasks
 
-- [ ] Port the accepted diagnostic family with the minimum root/generated CLI and shell option integration, using isolated diagnostic execution inside the declared paths rather than in-process dependency lookup.
-- [ ] Register the module in established source, generated-delivery and update-fixture inventories and mirrored alignment checks; document only actual advisory behavior and limits.
-- [ ] Reuse and adapt semantic root/generated CLI cases, including actual installed fresh/update consumers and dependency-name shadows that must stay unexecuted, without introducing unrelated catalog or execution-policy assets.
-- [ ] Obtain an independent exact-target source assessment and run the focused commands plus unchanged authoritative lint and smoke in this task checkout own locked environment; retain actual results and stop on authoritative failure.
-- [ ] Publish only the accepted commit through the normal managed-worktree path, create the independent PR, observe exact-head CI and applicable reviews, then archive this same plan through normal parent-owned lifecycle steps.
+- [x] Port the accepted diagnostic family with the minimum root/generated CLI and shell option integration, using isolated diagnostic execution inside the declared paths rather than in-process dependency lookup.
+- [x] Register the module in established source, generated-delivery and update-fixture inventories and mirrored alignment checks; document only actual advisory behavior and limits.
+- [x] Reuse and adapt semantic root/generated CLI cases, including actual installed fresh/update consumers and dependency-name shadows that must stay unexecuted, without introducing unrelated catalog or execution-policy assets.
+- [x] Obtain an independent exact-target source assessment and run the focused commands plus unchanged authoritative lint and smoke in this task checkout own locked environment; retain actual results and stop on authoritative failure.
+- [x] Publish only the accepted commit through the normal managed-worktree path, create the independent PR, observe exact-head CI and applicable reviews, then archive this same plan through normal parent-owned lifecycle steps.
 
 ## Validation Notes
 
@@ -107,3 +107,9 @@ checked_summary_ja: 宣言済みの変更範囲について、登録対応とPyt
 - Before plan publication, direct source reading corrected the unqualified stdlib-only assumption: PyYAML is optional for YAML correspondence. Protected original claims, probes and metadata results remain retained; no whole runtime closure is inferred.
 - The confirmed import-shadow counterexample invalidated in-process diagnostic loading. Preserve the same requirements, 13-path scope, acceptance and validation while selecting isolated diagnostic execution and a consumer-visible regression before implementation.
 - The allocator reads published source state rather than an ahead task checkout. The parent refused the provisional 388 preview, normally published only owner-merged cd7f81b first, then resumed the same logical task and normally allocated 411 under the shared lock; no unwritten reservation was marked written and no execution or review budget was reset.
+- The accepted thirteen-path product patch is sha256:e43d037612772a9d4495afdced02eefcb36ff877f84a6bfe178caf6d10748820, committed as d380032c6fc27111d373d90c852e8a62ee10176c. Parent acceptance bound the actual committed patch to the reviewed patch and all three unchanged semantic acceptance witnesses before normal managed publication; the implementation task checkout and temporary branch were removed by that publication.
+- In that implementation checkout's own locked environment, `python3 scripts/validate-changes.py --all --json`, the 52-case `python3 tests/test-validation-tools.py PlanAuthoringTest`, actual `tests/copier-update.sh --require-copier`, unchanged `scripts/lint-project-workflow.sh` and unchanged `tests/smoke.sh` all exited zero on the accepted target. Actual fresh and updated consumers exercised the installed diagnostic contract and retained project-owned artifacts and validation.
+- Separate actual Root and generated CLI runs on the same final source observed digest-bound reverse dependents, null unknowns for a missing source, unchanged fixture bytes and unexecuted declared dependency-name shadows. Those offline distribution probes are not substituted for the real Copier witnesses.
+- Earlier High/Medium/Low findings and their actual consumption remain retained. Parent probes reproduced runtime/data overlap execution, output/framing defects, successful-leader residual locks, inherited-pipe false failure and hidden Linux SA_NOCLDWAIT before correction, and observed the corrected refusals, bounded output and owned-group cleanup afterward. The scope-overrunning second review was rejected as clearing evidence and recorded in the parent operational security audit; no credential disclosure was established.
+- The exact final source-only independent assessment04 returned no High, Medium or Low findings; its receipt is sha256:4a0129665ff7f90d8dcb56e18708f5a6a12368e8eb8ad83541e861630d4fc0b4. Its runtime contained no successful filesystem or command-tool execution. Source assessment is not independent validation, a normal execution receipt, full runtime/OS-sandbox closure or operational controller adoption. The original third-review validation overclaim and its append-only correction remain preserved; only the later actual final-target results supported product acceptance.
+- PR43 https://github.com/rectaris/temp_project/pull/43 published only the public-base authoring and accepted product commits. Actual pull_request CI 40765806813 at d380032c6fc27111d373d90c852e8a62ee10176c passed all six jobs, with stable observed public base cd7f81b46b0f1e5c9b3c7802ee8221bca47d29dd and zero submitted reviews or review comments at that observation. PR43 was open/unmerged. Private dev, whole Issues 16/18/23, source478, main merge, release and operational adoption remain unchanged; this closeout preserves Tier2, requirements, acceptance, witness authority and all historical stops and consumption.
