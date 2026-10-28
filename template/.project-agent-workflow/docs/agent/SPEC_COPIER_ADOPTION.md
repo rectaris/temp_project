@@ -50,6 +50,14 @@ Run copy and update operations from a clean repository or a disposable clone so 
 
 The generated recurring update wrapper enforces that clean starting state and uses committed `HEAD` as the before-update content baseline.
 
+The default `python3 .project-agent-workflow/scripts/validate-copier-update.py --destination .` command and `validate(path)` library call require the exact-root Git worktree and committed ownership baseline. Git absence is not an implicit copy exemption. `--before-update` continues to require an exact-root, clean worktree.
+
+Only a deliberate fresh copy before Git initialization uses `--initial-copy` or `validate(path, initial_copy=True)`. The CLI flag is mutually exclusive with `--before-update`; never use it for an update. Copy mode refuses existing or enclosing Git repositories.
+
+Copy mode accepts only exit128, empty stdout and a complete known C-locale absence diagnostic, including the filesystem-boundary form with a canonical ancestor path. Before invoking Git it checks the canonical destination and every canonical ancestor for any reserved `.git` entry without following that entry. Markers and uncertain inspection refuse. Arbitrary `HEAD`, `objects` or `refs` product names are not banned.
+
+The flag declares copy intent; it does not prove erased history, every bare layout outside ambient Git discovery, or an atomic filesystem snapshot. Once Git is established, later query failure cannot skip committed ownership checks. It grants no additional external effect or controller-adoption authority.
+
 The final validator rejects changes to existing project-owned or unclassified paths except the insertion of an absent `model` or `model_reasoning_effort` default, the replacement of a declared retired `gpt-5.3-codex-spark` model with `gpt-5.6-terra`, and the exact recognized sequential-worker transition. Replacing any other model field the project already declared is rejected.
 
 In a changed agent profile, every line the project already had must survive byte for byte and in place. The only permitted rewrite substitutes `gpt-5.6-terra` for the retired value on its own `model` line, keeping that line's key, quoting and comment. An inserted default must take the form `field = "value"` with optional leading indentation, and a final line without a newline may gain only the newline that precedes an inserted default.
@@ -83,9 +91,10 @@ When a project needs a new reusable adapter, keep the project adapter outside `.
 ## Initial Copy
 
 1. Run `copier copy --trust` with the intended answers.
-2. Commit the generated baseline before adding product-specific policy.
-3. Add project policy only through the extension points above.
-4. Run the generated workflow validation and repository-specific validation.
+2. Before Git initialization, validate a deliberate Git-less copy with `python3 .project-agent-workflow/scripts/validate-copier-update.py --initial-copy --destination .`.
+3. Initialize Git and commit the generated baseline before adding product-specific policy.
+4. Add project policy only through the extension points above.
+5. Run the generated workflow validation and repository-specific validation.
 
 ## Updating an Adopted Project
 

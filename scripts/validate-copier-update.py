@@ -19,7 +19,14 @@ ALLOWED_TRACKED_DELETIONS = {
     "scripts/skillspector-scan.sh",
 }
 NON_REPOSITORY_DIAGNOSIS = (
-    "fatal: not a git repository (or any of the parent directories): .git"
+    b"fatal: not a git repository (or any of the parent directories): .git\n"
+)
+FILESYSTEM_BOUNDARY_PREFIX = (
+    b"fatal: not a git repository (or any parent up to mount point "
+)
+FILESYSTEM_BOUNDARY_SUFFIX = (
+    b")\nStopping at filesystem boundary "
+    b"(GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n"
 )
 OWNERSHIP_PATH = ".project-agent-workflow/ownership.yaml"
 CURRENT_OWNERSHIP_SHA256 = "9fbda9c0c795dd05560f0c1c43bf8a91cb70bc9fc6ee50a086765af1695bf536"
@@ -122,25 +129,59 @@ def require_git_success(
     return result
 
 
-def inspect_git(repository: Path) -> None:
+def _inspect_git_root(repository: Path, *, initial_copy: bool = False) -> bool:
+    if initial_copy:
+        # Inspect before Git can open a malformed marker, including a FIFO.
+        for directory in (repository, *repository.parents):
+            marker = directory / ".git"
+            try:
+                marker.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise UpdateValidationError(
+                    f"could not inspect initial-copy Git marker {marker}: {exc}"
+                ) from exc
+            raise UpdateValidationError(
+                f"initial-copy validation found an existing Git marker: {marker}"
+            )
+
     result = run_git(repository, "rev-parse", "--show-toplevel")
-    diagnosis = result.stderr.decode("utf-8", errors="replace").strip()
-    if result.returncode == 128 and diagnosis == NON_REPOSITORY_DIAGNOSIS:
-        return
+    if initial_copy and result.returncode == 128 and result.stdout == b"":
+        if result.stderr == NON_REPOSITORY_DIAGNOSIS:
+            return False
+        if result.stderr.startswith(FILESYSTEM_BOUNDARY_PREFIX) and result.stderr.endswith(
+            FILESYSTEM_BOUNDARY_SUFFIX
+        ):
+            boundary = result.stderr[
+                len(FILESYSTEM_BOUNDARY_PREFIX):-len(FILESYSTEM_BOUNDARY_SUFFIX)
+            ]
+            if any(
+                boundary == os.fsencode(directory)
+                for directory in (repository, *repository.parents)
+            ):
+                return False
     if result.returncode != 0:
+        diagnosis = result.stderr.decode("utf-8", errors="replace").strip()
         raise UpdateValidationError(
             "Git repository inspection failed with exit "
             f"{result.returncode}: {diagnosis or 'no diagnostic'}"
         )
-
-    reported_root = Path(
-        result.stdout.decode("utf-8", errors="strict").strip()
-    ).resolve()
-    if reported_root != repository:
+    if result.stdout != os.fsencode(repository) + b"\n":
         raise UpdateValidationError(
             f"destination is not the Git repository root: {repository} "
-            f"(Git reported {reported_root})"
+            f"(Git reported {result.stdout!r})"
         )
+    if initial_copy:
+        raise UpdateValidationError(
+            "initial-copy validation requires a destination without a Git repository"
+        )
+    return True
+
+
+def inspect_git(repository: Path, *, initial_copy: bool = False) -> bool:
+    if not _inspect_git_root(repository, initial_copy=initial_copy):
+        return False
 
     unmerged = require_git_success(repository, "ls-files", "-u", "-z").stdout
     if unmerged:
@@ -175,22 +216,11 @@ def inspect_git(repository: Path) -> None:
             "Copier update deleted tracked paths outside the allowlist: "
             + ", ".join(unclassified)
         )
+    return True
 
 
 def require_clean_update_start(repository: Path) -> None:
-    result = run_git(repository, "rev-parse", "--show-toplevel")
-    diagnosis = result.stderr.decode("utf-8", errors="replace").strip()
-    if result.returncode != 0:
-        raise UpdateValidationError(
-            "Copier update must start from a Git repository root: "
-            + (diagnosis or f"git exited {result.returncode}")
-        )
-    reported_root = Path(result.stdout.decode("utf-8", errors="strict").strip()).resolve()
-    if reported_root != repository:
-        raise UpdateValidationError(
-            f"destination is not the Git repository root: {repository} "
-            f"(Git reported {reported_root})"
-        )
+    _inspect_git_root(repository)
     status = require_git_success(
         repository, "status", "--porcelain=v1", "-z", "--untracked-files=all"
     ).stdout
@@ -464,17 +494,6 @@ def validate_agent_profile_transition(path: str, before: bytes, after: bytes) ->
 
 
 def inspect_project_owned_content(repository: Path) -> None:
-    worktree = run_git(repository, "rev-parse", "--is-inside-work-tree")
-    diagnosis = worktree.stderr.decode("utf-8", errors="replace").strip()
-    if worktree.returncode != 0:
-        if diagnosis == NON_REPOSITORY_DIAGNOSIS:
-            return
-        raise UpdateValidationError(
-            "could not determine whether Copier destination is a Git worktree: "
-            + (diagnosis or f"git exited {worktree.returncode}")
-        )
-    if worktree.stdout.strip() != b"true":
-        raise UpdateValidationError("Copier destination is not a Git worktree")
     ownership = run_git(repository, "show", f"HEAD:{OWNERSHIP_PATH}")
     if ownership.returncode != 0:
         diagnosis = ownership.stderr.decode("utf-8", errors="replace").strip()
@@ -686,12 +705,12 @@ def needs_japanese_routing_guidance(repository: Path) -> bool:
     return True
 
 
-def validate(destination: Path) -> bool:
+def validate(destination: Path, *, initial_copy: bool = False) -> bool:
     repository = destination.resolve()
     if not repository.is_dir():
         raise UpdateValidationError(f"destination is not a directory: {repository}")
-    inspect_git(repository)
-    inspect_project_owned_content(repository)
+    if inspect_git(repository, initial_copy=initial_copy):
+        inspect_project_owned_content(repository)
     inspect_filesystem(repository)
     inspect_external_access_profile(repository)
     return needs_japanese_routing_guidance(repository)
@@ -700,10 +719,16 @@ def validate(destination: Path) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", type=Path, default=Path("."))
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--before-update",
         action="store_true",
         help="require a clean Git repository before Copier starts",
+    )
+    mode.add_argument(
+        "--initial-copy",
+        action="store_true",
+        help="validate a fresh copy before Git initialization; never use for an update",
     )
     args = parser.parse_args()
     try:
@@ -711,7 +736,7 @@ def main() -> int:
             require_clean_update_start(args.destination.resolve())
             needs_guidance = False
         else:
-            needs_guidance = validate(args.destination)
+            needs_guidance = validate(args.destination, initial_copy=args.initial_copy)
     except UpdateValidationError as exc:
         print(f"unsafe Copier update result: {exc}", file=sys.stderr)
         return 1

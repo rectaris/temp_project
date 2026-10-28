@@ -24,6 +24,16 @@
 - Require `--trust` for every documented copy and update command because the template always runs the post-render agent-profile normalization task.
 - Explain that `--trust` authorizes template tasks but does not establish that an update is safe to commit.
 
+### Initial Copy and Update Validation
+
+The default `validate-copier-update.py --destination PATH` command and `validate(path)` library call require the exact-root Git worktree and its committed ownership baseline. Git absence is not an implicit copy exemption. The existing `--before-update` mode still requires an exact-root, clean worktree.
+
+Only a deliberate fresh copy before Git initialization uses `--initial-copy` or `validate(path, initial_copy=True)`. The CLI flag is mutually exclusive with `--before-update`; never use it to validate an update. Existing repositories and enclosing Git worktrees are refused in copy mode.
+
+Copy mode accepts only exit128, empty stdout and a complete known C-locale absence diagnostic, including the filesystem-boundary form with a canonical ancestor path. It first inspects the canonical destination and every canonical ancestor for any reserved `.git` entry without following that entry. Markers and inspection uncertainty refuse; arbitrary product names such as `HEAD`, `objects` and `refs` are not banned.
+
+This is explicit caller intent, not proof of erased repository history, every bare layout outside ambient Git discovery, or an atomic filesystem snapshot. Once a worktree is established, a later Git error cannot exempt committed ownership validation. This classification does not establish other Git transport or startup guarantees.
+
 ## Managed Boundaries
 
 Copier-managed:

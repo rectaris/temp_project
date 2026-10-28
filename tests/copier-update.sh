@@ -340,14 +340,19 @@ fixture_git "$browser_legacy_out" diff --check
 validator="$root/scripts/validate-copier-update.py"
 
 initial_copy="$tmp/non-git-initial-copy"
+validate_initial_copy() {
+  python3 "$initial_copy/.project-agent-workflow/scripts/validate-copier-update.py" \
+    --initial-copy --destination "$initial_copy"
+}
+
 run_copier copy -q -f --trust --defaults --vcs-ref v1.2.2 \
   --data-file "$root/tests/fixtures/docs.answers.yml" "$update_source" "$initial_copy" >/dev/null
-python3 "$validator" --destination "$initial_copy" >/dev/null
+validate_initial_copy >/dev/null
 test -x "$initial_copy/.project-agent-workflow/scripts/update-from-copier.sh"
 cmp "$validator" "$initial_copy/.project-agent-workflow/scripts/validate-copier-update.py"
 sed -i 's/^external_access_profile: restricted$/external_access_profile: task_scoped_default_allow/' \
   "$initial_copy/.copier-answers.yml"
-if python3 "$validator" --destination "$initial_copy" >/dev/null 2>&1; then
+if validate_initial_copy >/dev/null 2>&1; then
   echo "Copier validator accepted a task-scoped answer with a preserved version 1 policy" >&2
   exit 1
 fi
@@ -355,14 +360,14 @@ initial_policy="$initial_copy/docs/agent/external-services.yaml"
 initial_policy_backup="$tmp/non-git-initial-policy.yaml"
 cp "$initial_policy" "$initial_policy_backup"
 printf '%s\n' 'version: 2' 'access_profile: task_scoped_default_allow' >"$initial_policy"
-if python3 "$validator" --destination "$initial_copy" >/dev/null 2>&1; then
+if validate_initial_copy >/dev/null 2>&1; then
   echo "Copier validator accepted an incomplete version 2 external-service policy" >&2
   exit 1
 fi
 cp "$initial_policy_backup" "$initial_policy"
 sed -i 's/^external_access_profile: task_scoped_default_allow$/external_access_profile: restricted/' \
   "$initial_copy/.copier-answers.yml"
-python3 "$validator" --destination "$initial_copy" >/dev/null
+validate_initial_copy >/dev/null
 if "$initial_copy/.project-agent-workflow/scripts/update-from-copier.sh" -f >/dev/null 2>&1; then
   echo "Copier update wrapper accepted -f" >&2
   exit 1
