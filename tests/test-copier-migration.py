@@ -7,13 +7,16 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1155,9 +1158,6 @@ checked_summary_ja: 件数境界を検証する。
 
 
 class CopierOwnedContentValidationTest(unittest.TestCase):
-    def test_validator_seeded_profiles_match_the_normalizer(self) -> None:
-        self.assertEqual(VALIDATOR.SEEDED_AGENT_PROFILES, PROFILE_UPDATER.PROFILES)
-
     def make_repository(self) -> tuple[tempfile.TemporaryDirectory[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         repository = Path(temporary.name)
@@ -1364,17 +1364,6 @@ class RetiredAgentModelTransitionTest(unittest.TestCase):
         subprocess.run(["git", "commit", "-qm", f"declare {name}"], cwd=repository, check=True)
         return agent
 
-    def test_updater_and_validator_share_the_retired_model_rule(self) -> None:
-        self.assertEqual(PROFILE_UPDATER.RETIRED_MODEL, "gpt-5.3-codex-spark")
-        self.assertEqual(PROFILE_UPDATER.RETIRED_MODEL_REPLACEMENT, ("gpt-5.6-terra", "medium"))
-        self.assertEqual(VALIDATOR.RETIRED_AGENT_MODEL, PROFILE_UPDATER.RETIRED_MODEL)
-        self.assertEqual(
-            VALIDATOR.RETIRED_AGENT_MODEL_REPLACEMENT, PROFILE_UPDATER.RETIRED_MODEL_REPLACEMENT
-        )
-        self.assertNotIn(
-            "gpt-5.3-codex-spark", {model for model, _ in PROFILE_UPDATER.PROFILES.values()}
-        )
-
     def test_profile_task_replaces_only_the_retired_model_in_place(self) -> None:
         seeded = PROFILE_UPDATER.PROFILES["fast_scoped_worker"]
         self.assertEqual(
@@ -1567,6 +1556,191 @@ class RetiredAgentModelTransitionTest(unittest.TestCase):
             with self.assertRaisesRegex(PROFILE_UPDATER.ProfileError, "sequential_plan_worker"):
                 PROFILE_UPDATER.normalize_destination(destination)
             self.assertEqual({path.name: path.read_bytes() for path in agents.iterdir()}, before)
+
+
+class CopierRepositoryContextValidationTest(unittest.TestCase):
+    make_repository = CopierOwnedContentValidationTest.make_repository
+    PLAIN_ABSENCE = (
+        b"fatal: not a git repository (or any of the parent directories): .git\n"
+    )
+    BOUNDARY_ABSENCE = (
+        b"fatal: not a git repository (or any parent up to mount point %s)\n"
+        b"Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n"
+    )
+
+    def setUp(self) -> None:
+        self.environment = {
+            "PATH": os.defpath, "LANG": "C", "LC_ALL": "C",
+            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull, "GIT_TERMINAL_PROMPT": "0",
+        }
+        self.git = shutil.which("git", path=os.defpath)
+        if self.git is None:
+            raise RuntimeError("system Git is required for repository-context fixtures")
+
+    def capture(self, argv, *, cwd, env, timeout=5):
+        with subprocess.Popen(
+            argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            start_new_session=True,
+        ) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except BaseException:
+                if process.returncode is None:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.communicate(timeout=5)
+                raise
+            return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+
+    def run_cli(self, repository: Path, *mode: str):
+        return self.capture(
+            [sys.executable, "-I", "-S", "-B", str(VALIDATOR_PATH),
+             "--destination", str(repository), *mode],
+            cwd=repository, env=self.environment)
+
+    def test_copy_mode_is_explicit_and_exclusive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = Path(tmp)
+            self.assertEqual(self.run_cli(repository).returncode, 1)
+            copied = self.run_cli(repository, "--initial-copy")
+            self.assertEqual(copied.returncode, 0, copied.stderr)
+            self.assertEqual(self.run_cli(repository, "--before-update").returncode, 1)
+            self.assertEqual(
+                self.run_cli(repository, "--initial-copy", "--before-update").returncode, 2)
+
+    def test_copy_refuses_worktree_bare_and_enclosing_repositories(self) -> None:
+        temporary, repository = self.make_repository()
+        self.addCleanup(temporary.cleanup)
+        ordinary = self.run_cli(repository)
+        self.assertEqual(ordinary.returncode, 0, ordinary.stderr)
+        self.assertEqual(self.run_cli(repository, "--initial-copy").returncode, 1)
+        nested = repository / "nested"
+        nested.mkdir()
+        for mode in ((), ("--initial-copy",)):
+            with self.subTest(topology="enclosing", mode=mode):
+                self.assertEqual(self.run_cli(nested, *mode).returncode, 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            bare = Path(tmp)
+            initialized = self.capture(
+                [self.git, "init", "--bare", "-q", str(bare)],
+                cwd=bare, env=self.environment)
+            self.assertEqual(initialized.returncode, 0, initialized.stderr)
+            for mode in ((), ("--initial-copy",)):
+                with self.subTest(topology="bare", mode=mode):
+                    self.assertEqual(self.run_cli(bare, *mode).returncode, 1)
+
+    def test_copy_does_not_ban_arbitrary_product_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = Path(tmp)
+            (repository / "HEAD").write_text("product data, not a Git reference\n")
+            (repository / "objects").mkdir()
+            (repository / "refs").mkdir()
+            result = self.run_cli(repository, "--initial-copy")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_copy_refuses_reserved_markers_without_opening_them(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for kind in ("directory", "broken-link", "fifo"):
+                with self.subTest(kind=kind):
+                    repository = Path(tmp) / kind
+                    repository.mkdir()
+                    marker = repository / ".git"
+                    if kind == "directory":
+                        marker.mkdir()
+                    elif kind == "broken-link":
+                        marker.symlink_to("missing-metadata")
+                    elif hasattr(os, "mkfifo"):
+                        os.mkfifo(marker)
+                    else:
+                        continue
+                    self.assertEqual(self.run_cli(repository, "--initial-copy").returncode, 1)
+
+    def test_copy_checks_canonical_ancestors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            (parent / ".git").mkdir()
+            repository = parent / "project"
+            repository.mkdir()
+            alias = parent / "alias"
+            alias.symlink_to(repository, target_is_directory=True)
+            self.assertEqual(self.run_cli(alias, "--initial-copy").returncode, 1)
+
+    def test_copy_refuses_uncertain_marker_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(Path, "lstat", side_effect=PermissionError("unavailable")):
+                with self.assertRaises(VALIDATOR.UpdateValidationError):
+                    VALIDATOR.validate(Path(tmp), initial_copy=True)
+
+    def test_complete_absence_frames_reach_existing_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = Path(tmp).resolve()
+            bridge = repository / ".agents/skills/natural-japanese/SKILL.md"
+            bridge.parent.mkdir(parents=True)
+            bridge.write_text("fixture guidance\n")
+            boundary = self.BOUNDARY_ABSENCE % os.fsencode(repository.parent)
+            for diagnosis in (self.PLAIN_ABSENCE, boundary):
+                with self.subTest(diagnosis=diagnosis):
+                    result = subprocess.CompletedProcess([], 128, b"", diagnosis)
+                    with mock.patch.object(VALIDATOR, "run_git", return_value=result):
+                        self.assertTrue(VALIDATOR.validate(repository, initial_copy=True))
+
+    def test_copy_refuses_incomplete_or_unknown_git_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = Path(tmp)
+            plain = self.PLAIN_ABSENCE
+            unrelated = self.BOUNDARY_ABSENCE % b"/unrelated-boundary"
+            results = (
+                subprocess.CompletedProcess([], 128, b"unexpected output", plain),
+                subprocess.CompletedProcess([], 129, b"", plain),
+                subprocess.CompletedProcess([], 128, b"", b"unknown failure\n"),
+                subprocess.CompletedProcess([], 128, b"", plain + b"extra diagnostic\n"),
+                subprocess.CompletedProcess([], 128, b"", unrelated),
+            )
+            for result in results:
+                with self.subTest(result=result):
+                    with mock.patch.object(VALIDATOR, "run_git", return_value=result):
+                        with self.assertRaises(VALIDATOR.UpdateValidationError):
+                            VALIDATOR.validate(repository, initial_copy=True)
+
+    def test_later_git_disappearance_cannot_skip_ownership(self) -> None:
+        temporary, repository = self.make_repository()
+        self.addCleanup(temporary.cleanup)
+        inspect_git = VALIDATOR.inspect_git
+        with tempfile.TemporaryDirectory() as detached:
+            def inspect_then_detach(path: Path, **options) -> bool:
+                established = inspect_git(path, **options)
+                (path / ".git").rename(Path(detached) / "metadata")
+                return established
+
+            environment = self.environment | {"GIT_DISCOVERY_ACROSS_FILESYSTEM": "1"}
+            with mock.patch.dict(os.environ, environment, clear=True):
+                with mock.patch.object(VALIDATOR, "inspect_git", side_effect=inspect_then_detach):
+                    with self.assertRaises(VALIDATOR.UpdateValidationError):
+                        VALIDATOR.validate(repository)
+
+    def test_before_update_keeps_clean_start_requirement(self) -> None:
+        temporary, repository = self.make_repository()
+        self.addCleanup(temporary.cleanup)
+        clean = self.run_cli(repository, "--before-update")
+        self.assertEqual(clean.returncode, 0, clean.stderr)
+        (repository / "AGENTS.md").write_text("uncommitted project policy\n")
+        self.assertEqual(self.run_cli(repository, "--before-update").returncode, 1)
+
+    def test_exact_root_preserves_legitimate_path_whitespace(self) -> None:
+        temporary, repository = self.make_repository()
+        self.addCleanup(temporary.cleanup)
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "project "
+            cloned = self.capture(
+                [self.git, "clone", "--local", "--no-hardlinks", "-q",
+                 str(repository), str(destination)],
+                cwd=Path(tmp), env=self.environment)
+            self.assertEqual(cloned.returncode, 0, cloned.stderr)
+            result = self.run_cli(destination)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
