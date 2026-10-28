@@ -336,6 +336,8 @@ test -f "$browser_legacy_out/.agents/skills/verify-copier-update/SKILL.md"
 test -f "$browser_legacy_out/.project-agent-workflow/skills/verify-copier-update/SKILL.md"
 test -x "$browser_legacy_out/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py"
 fixture_git "$browser_legacy_out" diff --check
+python3 "$root/tests/fixtures/orchestration/parent-authority-cli.py" \
+  "$browser_legacy_out/.project-agent-workflow/scripts/parent-authority.py"
 
 validator="$root/scripts/validate-copier-update.py"
 
@@ -348,6 +350,8 @@ validate_initial_copy() {
 run_copier copy -q -f --trust --defaults --vcs-ref v1.2.2 \
   --data-file "$root/tests/fixtures/docs.answers.yml" "$update_source" "$initial_copy" >/dev/null
 validate_initial_copy >/dev/null
+python3 "$root/tests/fixtures/orchestration/parent-authority-cli.py" \
+  "$initial_copy/.project-agent-workflow/scripts/parent-authority.py"
 test -x "$initial_copy/.project-agent-workflow/scripts/update-from-copier.sh"
 cmp "$validator" "$initial_copy/.project-agent-workflow/scripts/validate-copier-update.py"
 sed -i 's/^external_access_profile: restricted$/external_access_profile: task_scoped_default_allow/' \

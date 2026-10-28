@@ -564,3 +564,42 @@ Decompose the coupled reconstruction requirement into these seven clauses. The u
 These scripts are local-only. External service sync belongs to `SPEC_EXTERNAL_SERVICES.md`.
 
 `.project-agent-workflow/scripts/sync-plan-to-linear.sh` is a generic policy gate. It can render a local dry-run draft without external reads or writes, but read-capable and write-capable modes require `docs/agent/external-services.yaml` plus a project-specific adapter before side effects are possible.
+
+## Parent-held accepted Git inputs
+
+The parent may fix the exact files of one already accepted Git commit in a private directory and retain a digest of their manifest. This input bundle records source identity and file contents; it does not approve the source, authorize execution, or adopt an execution controller.
+
+Select `.project-agent-workflow/scripts/parent-authority.py` from the installed distribution and store its absolute path in `command`. The parent supplies an exact accepted commit, its full local publication ref, an operation identifier, and a bundle destination below an existing owner-only directory outside every registered repository worktree.
+
+```sh
+"$command" materialize \
+  --repository "$repository" --bundle "$bundle" \
+  --accepted-commit "$accepted_commit" --accepted-ref "$accepted_ref" \
+  --operation-id "$operation_id"
+```
+
+Keep the returned `manifest_digest` as the parent pin. Verification requires that exact pin and the same source selection:
+
+```sh
+"$command" verify \
+  --repository "$repository" --bundle "$bundle" \
+  --accepted-commit "$accepted_commit" --accepted-ref "$accepted_ref" \
+  --manifest-digest "$manifest_digest"
+```
+
+The manifest binds the canonical repository identity, accepted commit/ref, operation, complete regular Git blob inventory, file modes and runtime observations. Tracked symlinks and gitlinks refuse. Files larger than 32 MiB or a tree larger than 256 MiB refuse. Local Git reads exclude ambient credentials, replacement objects, lazy fetches and worktree executors.
+
+An exact same-operation retry may recover a recognized intact stage or verify an existing published bundle. A foreign destination, changed source or operation, corrupted bytes, unsafe file type or alias, or missing previously bound state refuses. Preserve the retained bundle, intent, stage and lock; never delete or repair unknown state to make a retry pass.
+
+`launch-contract` verifies the same inputs and returns a fixed Python entrypoint, inventory-only file arguments and a bundle-root working directory. It does not run the returned command:
+
+```sh
+"$command" launch-contract \
+  --repository "$repository" --bundle "$bundle" \
+  --accepted-commit "$accepted_commit" --accepted-ref "$accepted_ref" \
+  --manifest-digest "$manifest_digest" --entrypoint "$entrypoint"
+```
+
+Every operation retains `member_write_admitted: false`; a launch contract also retains `execution_authorized: false`. Standard-library closure and a member-excluded native entrypoint remain unverified blocking requirements. Filesystem ownership and modes establish observed identities, not a sandbox against another process using the same operating-system account. Source installation supplies none of those missing guarantees or any operational adoption.
+
+Physical placement currently requires Linux mount/descriptor observations on supported ext4, xfs or tmpfs views, and local child custody requires POSIX `waitid(WNOWAIT)`. Missing or ambiguous host capabilities refuse rather than weakening placement, reading from a mutable candidate, or selecting a different execution path.
