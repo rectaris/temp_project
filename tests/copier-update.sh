@@ -1045,6 +1045,16 @@ if generated_destination not in index.read_text(encoding="utf-8"):
 EOF_MANAGED_ROUTING
 }
 
+run_python_source_case() {
+  python3 - "$root" "$1" <<'PY_SOURCE_CASE'
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(sys.argv[1]) / "tests"))
+from validation_tools.plan_authoring import _installed_scope_observation_case
+_installed_scope_observation_case(Path(sys.argv[2]))
+PY_SOURCE_CASE
+}
+
 validate_common_lane() {
   out=$1
   expect_legacy_root=${2:-1}
@@ -1175,6 +1185,7 @@ validate_common_lane() {
     exit 1
   fi
   assert_agent_profiles "$out"
+  run_python_source_case "$out"
 }
 
 earliest_out=$(prepare_lane earliest-supported "$earliest_ref" "$legacy_answers")
@@ -1842,6 +1853,7 @@ fixture_git "$v111_out" diff --check
 opencode_go_out="$tmp/opencode-go-fresh-copy"
 run_copier copy -q -f --trust --defaults --vcs-ref "$target_ref" \
   --data-file "$root/tests/fixtures/broad.answers.yml" "$update_source" "$opencode_go_out" >/dev/null
+run_python_source_case "$opencode_go_out"
 test -f "$opencode_go_out/.project-agent-workflow/scripts/opencode_go_transport.py"
 cmp "$root/template/.project-agent-workflow/scripts/opencode_go_transport.py" \
   "$opencode_go_out/.project-agent-workflow/scripts/opencode_go_transport.py"

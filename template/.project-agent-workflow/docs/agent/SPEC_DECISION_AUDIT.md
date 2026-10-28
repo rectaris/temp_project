@@ -89,6 +89,102 @@ unchanged. A new plan id, a routine checkpoint, or a resumed session does not by
 itself require the same approval again. A changed requirement, a changed safety
 condition, expanded external effects, or continuing a stopped run always does.
 
+### Optional scope diagnostics
+
+When the installed command supports `--scope-candidates`, explicitly request it
+with the existing check command, not the write command:
+
+```sh
+.project-agent-workflow/scripts/create-plan.sh --check --input authoring-input.json --scope-candidates
+```
+
+The option adds advisory `scope-candidate` rows from fixed registration sources.
+They identify possible counterparts, ownership coverage and delivery registrations;
+missing, unsafe, dynamic or unsupported correspondence stays unknown.
+A suggested path grants no write permission and requires no automatic edit.
+Catalog projections report declared path/digest references without opening their
+referenced policy assets or proving that their digests agree.
+
+For normalized `.py` paths already declared in `write_scope`, the same option emits
+`python-source-observation` records with available SHA-256, UTF-8 byte size,
+physical CR/LF/CRLF line count, AST declaration/import positions and aliases.
+Definition spans start at the declaration, not necessarily its decorators.
+Potential loader-call spellings omit arguments and bodies and do not prove callable
+identity or exhaustive dynamic-load detection.
+Source reads are descriptor-relative, no-follow, single-link regular-file reads
+with bounded size and before/after/live identity checks.
+The Python observation budget is 2 MiB per file, not a source acceptance limit.
+Unavailable source retains unknown measurements; parser failure retains available
+source facts but leaves syntax results null rather than proven empty.
+Syntax detail also has representation budgets: 1024 records per file, 4096 across
+sorted declared paths, and 128 KiB per serialized observation. Definitions,
+imports, each imported alias and potential loader calls consume records.
+Budget exhaustion retains available source measurements but makes syntax and
+dependent sets unknown/null, never a silently truncated or proven-empty result.
+These are diagnostic budgets, not source acceptance limits or a file-splitting rule.
+Diagnostic JSON uses ASCII escapes so admitted Unicode path characters cannot
+split records; those separators are also escaped in the diagnostic check's human
+report so they cannot inject additional record-prefixed lines.
+
+One `python-relative-import-relations` aggregate derives only from those captured
+observations, without reading inferred modules, initializers or directories.
+A lexical relative module reference becomes a relation only when exactly one
+explicitly declared parseable module or package spelling matches.
+Missing, ambiguous, absolute, dynamic and attribute-versus-submodule resolution
+stays unknown; execution contexts and imported attribute identities stay unknown.
+`cycles` groups self-loops and cyclic strongly connected components in this
+observed static subgraph, not executed cycles or whole-project acyclicity.
+`reverse_dependents` lists other declared parsed sources reaching each target,
+with distinct sorted direct/transitive path-digest endpoints and no self entry.
+Unknown targets retain null sets; empty parsed sets mean no observed consumer,
+not proof that runtime consumers are absent.
+
+Choose the analyzer code and Python runtime independently of untrusted inspected
+data. The diagnostic refuses a declared Python file overlapping the selected
+helper, entrypoint or known loaded module by path or file identity. Before
+metadata/YAML observation, the isolated child also refuses declared Python
+paths inside its actual stdlib/platstdlib/purelib/platlib directories, including
+packages it could import later. These refusals make no non-execution claim for
+an overlapping runtime. To inspect those same files,
+invoke the Python check CLI from a separately accepted analyzer/runtime and pass
+the inspected project with the existing `--root` option.
+This is a runtime/data role boundary, not a filename exclusion: an external
+accepted analyzer still observes the declared tool files as data.
+It cannot make an untrusted bootstrap safe after that bootstrap has already run;
+never start candidate tool code to authorize or inspect itself.
+
+The CLI runs the helper in an isolated, non-bytecode Python child with a minimal
+environment. The child excludes ordinary cwd/script-directory dependency-name
+lookup for observation. YAML correspondence uses PyYAML only when that isolated
+interpreter can import it; otherwise correspondence remains unknown.
+This is not an OS sandbox or proof of complete interpreter/native/package closure.
+The parent incrementally consumes at most 8 MiB of combined stdout/stderr, with
+stderr additionally capped at 64 KiB. The existing child deadline is 30 seconds;
+exceeding time or output bounds terminates the child process group and refuses
+the requested diagnostic without partial success.
+Closed streams and a successful leader exit do not establish an empty process
+group. The parent observes non-reaping leader completion during pipe consumption,
+not only after EOF. It terminates residual group members while that leader
+identity is still held, drains buffered output, then reaps and preserves the
+leader's original exit status. An inherited open pipe does not turn success into
+a deadline failure.
+Before starting the diagnostic helper, a trusted immediate-exit child proves
+current `waitid`/`WNOWAIT` operation: its unchanged exit is observed twice without
+reaping, then explicitly reaped. Symbol availability and Python's default
+`SIGCHLD` metadata alone are insufficient; auto-reaping configurations such as
+`SA_NOCLDWAIT` refuse before the helper starts. The probe shares the same deadline.
+The caller must retain exclusive child-reaping ownership during the operation.
+If helper observation loses that ownership, the diagnostic refuses and does not
+signal an unverified numeric process-group identity. No unsafe reap-then-kill
+fallback or complete runtime/OS-sandbox guarantee is introduced.
+The helper also bounds its complete serialized response to 8 MiB.
+A launch or diagnostic failure never falls back to in-process source loading.
+Ordinary checks, structural refusals, existing write behavior and Python
+`--print-digest` output remain unchanged; digest-only checks suppress diagnostics.
+The generated shell accepts the option only with `--check`.
+No row proves complete runtime dependencies, forbidden-import policy, responsibility
+separation, semantic sufficiency, efficiency, execution or acceptance authority.
+
 ### Evidence For Implementation Assumptions
 
 Connect each design-critical assumption to the existing processing, its owners and consumers, the adopted tool version, and the intended end-to-end behavior.

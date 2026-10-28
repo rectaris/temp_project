@@ -1738,6 +1738,12 @@ def require_sandboxed_plan_worker_alignment() -> None:
         fail("plan authoring root/template libraries differ")
     if (root_authoring.stat().st_mode & 0o777) != (template_authoring.stat().st_mode & 0o777):
         fail("plan authoring root/template library modes differ")
+    root_scope = ROOT / "scripts/project_workflow/plan_scope_candidates.py"
+    template_scope = ROOT / "template/.project-agent-workflow/scripts/plan_scope_candidates.py"
+    if root_scope.read_bytes() != template_scope.read_bytes():
+        fail("plan scope diagnostics root/template libraries differ")
+    if (root_scope.stat().st_mode & 0o777) != (template_scope.stat().st_mode & 0o777):
+        fail("plan scope diagnostics root/template library modes differ")
     authoring_text = root_authoring.read_text(encoding="utf-8")
     for marker in (
         "def check_authoring_input", "def write_authoring_input",
