@@ -1,6 +1,7 @@
 # Publish fixed accepted Git input bundles without execution authority
 
-status: in_progress
+status: deferred
+completion_deferred_reason: A separately implementable public-base initial-copy validation defect blocks the unchanged real Copier witness; preserve the held candidate and resume only after its independently accepted prerequisite.
 primary_invariant: A parent-selected accepted Git commit and local publication ref produce one private, source-bound, tamper-evident input bundle; recovery never replaces unknown state, and materialization or a launch contract grants no execution, member admission, controller adoption, merge or historical acceptance.
 task_types:
   - template_workflow
@@ -105,3 +106,8 @@ checked_summary_ja: 受入済みGit入力を固定・照合する基盤を初回
 - The public baseline lacks the adopted execution policy; current-work returned exit1: current execution policy is missing; retained work grants no new authority. The new explicit first-installation authority is recorded separately; do not rerun that refusal, copy a policy to fabricate adoption or initialize a legacy execution.
 - Private source policy necessity-1 pins controller7501ae6a; its acceptance and prior505/506 results do not transfer to this public target. Original public branch b1eae00c, local accepted source343dbbbe, original failed publication checks and unknown historical consumption remain distinct.
 - Preserve the existing deferred public Plan418 and its index row. Orca helpers have empty write scopes and provide advisory source/CI mapping only; main owns permissions, authoring, implementation, review acceptance, validation, lifecycle, commits and external effects.
+- Authored plan commit ac64f2278c7b06a7a368d7fa085453103439245e passed both unchanged prepublication commands in its own locked authoring checkout and was managed-published before implementation.
+- Original target sha256:5aacbd018842240317c58f075f0b7a3e81fb32712ee2765b7dcab6d78f3660ca received one Medium source finding: a completed stage with its manifest could repair missing inventory. The parent reproduced missing-blob and missing-tree failures, corrected both mirrors within scope, and observed both refusal cases plus intact recovery passing. Fresh independent assessment cleared that finding on corrected target sha256:caaaef703e99dfb9d3ec7f0c84b2065c2f915d796f7b1d1e06bddd28accec90d; it did not accept the overall candidate.
+- Declared focused root CLI and full validation-tools commands passed; real Copier update exited 1 at the pre-existing non-Git initial-copy validator. Original output sha256:d6c07cd642048c5474d36056e817dd02aa88c54f842dd639a21790585478fe4d and bounded diagnosis remain in external evidence pr-505-506-publication-20261028. No authoritative product command has run; no authoritative-failure state or legacy/schema-8 receipt is claimed.
+- Independent source diagnosis confirmed the validator's fixed ordinary-diagnostic comparison rejects the host's filesystem-boundary absence frame. The existing accepted explicit-initial-copy mechanism can be ported independently, retaining default update rejection and every mandatory command. Its unrelated ownership pin, process helper and historical audit must not be copied into the port.
+- Preserve the exact corrected candidate as local stash 0515443366840b3e496284e1db361e8ab00c1ed3 and external foundation-388-corrected-held-target.patch. This deferral changes no requirement, acceptance digest, product write scope or validation command and grants no new review capacity, adoption, or source478 authority.
