@@ -308,3 +308,4 @@ id	path
 401	docs/plan/checked/2026/10/16-31/401-publish-explicit-copier-initial-copy-validation.md
 411	docs/plan/checked/2026/10/16-31/411-publish-advisory-python-scope-diagnostics.md
 412	docs/plan/checked/2026/10/16-31/412-correct-public-scope-diagnostic-runtime-boundary.md
+388	docs/plan/checked/2026/10/16-31/388-publish-parent-held-git-input-foundation.md
