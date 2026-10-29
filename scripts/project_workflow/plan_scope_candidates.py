@@ -1,16 +1,112 @@
 """Advisory scope correspondence from existing registrations, never write authority."""
 
-from __future__ import annotations
+import _thread
+import posix as _bootstrap_os
+import sys
 
-import ast
-import hashlib
-import json
-import os
-import re
-import stat
-import time
-from pathlib import Path, PurePosixPath
-from typing import Any
+
+class _RuntimeDataGuard:
+    """Keep future runtime reads and execution disjoint from declared data."""
+
+    def __init__(self, root: "Path", paths: list[str]):
+        root_name = _bootstrap_os.fspath(root).rstrip("/")
+        self.sources = tuple((filename, self.identity(filename))
+                             for filename in (root_name + "/" + path for path in paths))
+        self.reader = _thread._local()
+        self.installed = False
+        self.active = False
+
+    @staticmethod
+    def identity(path: "Any", *, follow_symlinks: bool = False) -> tuple[int, ...] | None:
+        try:
+            value = _bootstrap_os.stat(path, follow_symlinks=follow_symlinks)
+        except (OSError, ValueError, TypeError):
+            return None
+        return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+    def open_data_descriptor(self, path: "Any", flags: int, *, dir_fd: int | None = None) -> int:
+        """Allow only this thread's one descriptor acquisition, never runtime loads."""
+        if not self.active:
+            return os.open(path, flags, dir_fd=dir_fd)
+        filename = os.fspath(path)
+        flags |= os.O_CLOEXEC
+        if getattr(self.reader, "opening", None) is not None:
+            raise ImportError("scope diagnostic data acquisition is already active")
+        self.reader.opening = (filename, flags)
+        descriptor = -1
+        try:
+            descriptor = os.open(filename, flags, dir_fd=dir_fd)
+            if self.reader.opening is not None:
+                os.close(descriptor)
+                raise ImportError("scope diagnostic descriptor acquisition was not guarded")
+            return descriptor
+        finally:
+            self.reader.opening = None
+
+    def __call__(self, event: str, arguments: tuple["Any", ...]) -> None:
+        if event == "project_agent_workflow.scope_guard_ready":
+            if arguments and arguments[0] is self:
+                self.installed = True
+            return
+        if not self.active:
+            return
+        if event == "open":
+            filename = arguments[0]
+            permit = getattr(self.reader, "opening", None)
+            if permit is not None and (filename, arguments[2]) == permit:
+                self.reader.opening = None
+                return
+        elif event == "exec":
+            filename = arguments[0].co_filename
+        elif event == "import":
+            filename = arguments[1]
+        else:
+            return
+        if not isinstance(filename, (str, bytes)):
+            return
+        identities = set()
+        for path, original in self.sources:
+            current = self.identity(path)
+            if current != original:
+                raise ImportError("scope diagnostic inspected data changed during runtime observation")
+            if current is not None:
+                identities.add(current[:2])
+        runtime = self.identity(filename, follow_symlinks=True)
+        if runtime is not None and runtime[:2] in identities:
+            raise ImportError("scope diagnostic runtime overlaps inspected data")
+
+
+_runtime_data_guard: _RuntimeDataGuard | None = None
+_runtime_data_guard_lock = _thread.allocate_lock()
+_bootstrap_scope: tuple[str, tuple[str, ...]] | None = None
+
+if __name__ == "__main__":
+    if (len(sys.argv) < 2 or not sys.flags.isolated or not sys.flags.no_site
+            or not sys.dont_write_bytecode):
+        raise ValueError("scope helper requires isolated non-caching declared-scope bootstrap")
+    _bootstrap_scope = (sys.argv[1], tuple(sys.argv[2:]))
+    _runtime_data_guard = _RuntimeDataGuard(_bootstrap_scope[0], list(_bootstrap_scope[1]))
+    sys.addaudithook(_runtime_data_guard)
+    sys.audit("project_agent_workflow.scope_guard_ready", _runtime_data_guard)
+    if not _runtime_data_guard.installed:
+        raise ValueError("scope diagnostic runtime guard is unavailable")
+    _runtime_data_guard.active = True
+    # Restore isolated runtime site support only after declared identities are guarded.
+    import site
+
+    site.main()
+
+# These filesystem-backed dependencies must load only after the bootstrap guard.
+import ast  # noqa: E402
+import hashlib  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import re  # noqa: E402
+import stat  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path, PurePosixPath  # noqa: E402
+from types import ModuleType  # noqa: E402
+from typing import Any  # noqa: E402
 
 
 MAX_SOURCE_BYTES = 512 * 1024
@@ -29,13 +125,15 @@ class Source:
         self.digest: str | None = None
         descriptor = -1
         directory = -1
+        guard = _runtime_data_guard
+        open_source = guard.open_data_descriptor if guard is not None else os.open
         try:
-            directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            directory = open_source(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             for part in Path(path).parts[:-1]:
-                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                child = open_source(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
                 os.close(directory)
                 directory = child
-            descriptor = os.open(Path(path).name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            descriptor = open_source(Path(path).name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
             before = os.fstat(descriptor)
             if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > limit:
                 return
@@ -379,6 +477,83 @@ def _describe_relative_import_relations(observations: list[dict[str, Any]]) -> d
 
 
 def render_candidates(root: Path, paths: list[str], profile: str) -> str:
+    """Guard one loaded helper instance; refuse its concurrent or nested renders."""
+    import sys
+
+    global _runtime_data_guard
+    if not _runtime_data_guard_lock.acquire(blocking=False):
+        raise ValueError("scope diagnostic requires a separate process for concurrent observations")
+    try:
+        if _runtime_data_guard is None:
+            guard = _RuntimeDataGuard(root, [])
+            sys.addaudithook(guard)
+            sys.audit("project_agent_workflow.scope_guard_ready", guard)
+            if not guard.installed:
+                raise ValueError("scope diagnostic runtime guard is unavailable")
+            _runtime_data_guard = guard
+        guard = _runtime_data_guard
+        previous_sources, previous_active = guard.sources, guard.active
+        guard.active = True
+        try:
+            guard.sources = tuple((root / path, guard.identity(root / path)) for path in paths)
+            runtime_paths = {Path(__file__).resolve()}
+            runtime_files = [sys.argv[0], sys.executable]
+            for module in tuple(sys.modules.values()):
+                if module is None:
+                    continue
+                try:
+                    namespace = ModuleType.__dict__["__dict__"].__get__(module, ModuleType)
+                except (AttributeError, TypeError):
+                    continue
+                runtime_files.extend((namespace.get("__file__"), namespace.get("__cached__")))
+            for filename in runtime_files:
+                if filename is None:
+                    continue
+                if type(filename) is bytes:
+                    filename = os.fsdecode(filename)
+                elif type(filename) is not str:
+                    raise ValueError("scope diagnostic runtime metadata path is unsupported")
+                try:
+                    runtime_paths.add(Path(filename).resolve(strict=True))
+                except (OSError, RuntimeError, ValueError):
+                    pass
+            runtime_identities = set()
+            for path in runtime_paths:
+                try:
+                    metadata = path.stat()
+                    runtime_identities.add((metadata.st_dev, metadata.st_ino))
+                except OSError:
+                    pass
+            for relative in paths:
+                target = root / relative
+                try:
+                    metadata = target.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if (target.resolve() in runtime_paths
+                        or (metadata.st_dev, metadata.st_ino) in runtime_identities):
+                    raise ValueError("scope diagnostic runtime overlaps inspected data; select an independent runtime")
+            import sysconfig
+
+            runtime_directories = {
+                Path(sysconfig.get_path(name)).resolve()
+                for name in ("stdlib", "platstdlib", "purelib", "platlib")
+            }
+            for relative in paths:
+                if any(
+                    (root / relative).resolve().is_relative_to(directory)
+                    for directory in runtime_directories
+                ):
+                    raise ValueError("scope diagnostic runtime overlaps inspected data; select an independent runtime")
+            return _render_candidates(root, paths, profile)
+        finally:
+            guard.sources = previous_sources
+            guard.active = previous_active
+    finally:
+        _runtime_data_guard_lock.release()
+
+
+def _render_candidates(root: Path, paths: list[str], profile: str) -> str:
     """Return diagnostic rows without changing input, reservations, files or scope."""
     started = time.monotonic()
     sources: dict[tuple[str, int], Source] = {}
@@ -650,21 +825,11 @@ def render_candidates(root: Path, paths: list[str], profile: str) -> str:
 
 
 def main() -> int:
-    import sys
-    import sysconfig
-
+    if _bootstrap_scope is None:
+        raise ValueError("scope helper requires its declared-scope bootstrap")
     request = json.load(sys.stdin)
-    root = Path(request["root"])
-    runtime_directories = {
-        Path(sysconfig.get_path(name)).resolve()
-        for name in ("stdlib", "platstdlib", "purelib", "platlib")
-    }
-    for relative in request["paths"]:
-        if relative.endswith(".py") and any(
-            (root / relative).resolve().is_relative_to(directory)
-            for directory in runtime_directories
-        ):
-            raise ValueError("scope diagnostic runtime overlaps inspected data; select an independent runtime")
+    if (request["root"], tuple(request["paths"])) != _bootstrap_scope:
+        raise ValueError("scope helper request differs from its guarded bootstrap scope")
     sys.stdout.write(render_candidates(
         Path(request["root"]), request["paths"], request["profile"]
     ))

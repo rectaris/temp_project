@@ -28,6 +28,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 
@@ -1477,70 +1478,191 @@ def reject_symlinked_declared_paths(root: Path, document: dict[str, Any]) -> Non
             reject_symlinked_components(root, relative, label)
 
 
-def _probe_scope_child_observation(deadline: float) -> None:
-    """Prove current child ownership without running the diagnostic helper."""
+def _scope_child_observation_deadline() -> float:
+    """Prove diagnostic child ownership before command-side Git or reservations."""
+    import ctypes
+    import signal
     import time
 
+    required = ("waitpid", "waitid", "getpgid", "getsid", "killpg",
+                "P_PID", "WEXITED", "WNOHANG", "WNOWAIT", "CLD_EXITED")
+    if not all(hasattr(os, name) for name in required):
+        raise AuthoringError("scope diagnostic requires non-reaping POSIX child observation")
+    if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
+        raise AuthoringError("scope diagnostic requires default SIGCHLD ownership")
+    deadline = time.monotonic() + SCOPE_DIAGNOSTIC_TIMEOUT
+    _probe_scope_child_observation(deadline, ctypes)
+    return deadline
+
+
+def _probe_scope_child_observation(deadline: float, ctypes_module: Any) -> None:
+    """Prove observation and signalling through an atomically acquired process FD."""
+    import errno
+    import signal
+    import time
+
+    if sys.platform != "linux":
+        raise AuthoringError("scope diagnostic requires native atomic process-descriptor support")
     try:
-        child = os.fork()
-    except OSError as exc:
-        raise AuthoringError(f"scope child-observation probe could not start: {exc}") from exc
-    if child == 0:
-        os._exit(0)
-    reaped = False
+        library = ctypes_module.CDLL(None, use_errno=True)
+        spawn = library.pidfd_spawn
+        spawn.argtypes = [ctypes_module.POINTER(ctypes_module.c_int), ctypes_module.c_char_p,
+                          ctypes_module.c_void_p, ctypes_module.c_void_p,
+                          ctypes_module.POINTER(ctypes_module.c_char_p),
+                          ctypes_module.POINTER(ctypes_module.c_char_p)]
+        spawn.restype = ctypes_module.c_int
+        open_descriptor = library.pidfd_open
+        open_descriptor.argtypes = [ctypes_module.c_int, ctypes_module.c_uint]
+        open_descriptor.restype = ctypes_module.c_int
+        send_signal = library.pidfd_send_signal
+        send_signal.argtypes = [ctypes_module.c_int, ctypes_module.c_int,
+                                ctypes_module.c_void_p, ctypes_module.c_uint]
+        send_signal.restype = ctypes_module.c_int
+    except (AttributeError, OSError) as exc:
+        raise AuthoringError("scope diagnostic requires native atomic process-descriptor support") from exc
+
+    # Linux idtype_t value; exercise it before creating any probe, including on
+    # interpreters whose build headers did not expose os.P_PIDFD.
+    descriptor_type = getattr(os, "P_PIDFD", 3)
+    self_descriptor = open_descriptor(os.getpid(), 0)
+    if self_descriptor < 0:
+        raise AuthoringError("scope diagnostic cannot acquire a native process descriptor")
     try:
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise AuthoringError("scope child-observation probe exceeded its time budget")
-            observed = os.waitid(os.P_PID, child, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-            if observed is not None:
-                break
-            time.sleep(min(0.01, remaining))
-        repeated = os.waitid(os.P_PID, child, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-        if (observed.si_pid != child or observed.si_code != os.CLD_EXITED
-                or observed.si_status != 0 or repeated != observed):
-            raise AuthoringError("scope child-observation probe did not preserve a waitable exit")
-        waited = os.waitpid(child, 0)
-        reaped = True
-        if waited != (child, 0):
-            raise AuthoringError("scope child-observation probe did not reap its original exit")
-    except OSError as exc:
-        raise AuthoringError(f"scope non-reaping child observation is unavailable: {exc}") from exc
+        try:
+            os.waitid(descriptor_type, self_descriptor, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except ChildProcessError:
+            pass  # A descriptor for this caller is deliberately not a child.
+        except OSError as exc:
+            raise AuthoringError("scope native non-reaping child observation is unavailable") from exc
+        else:
+            raise AuthoringError("scope process-descriptor child identity is unavailable")
+        # Test syscall availability without creating a child or sending a signal.
+        if send_signal(self_descriptor, 0, None, 0) < 0:
+            raise AuthoringError("scope native process-descriptor signalling is unavailable")
     finally:
-        if not reaped:
-            # The fixed probe body calls _exit(0), not the candidate helper.
-            # No group has started; an already-reaped PID is never signalled.
-            try:
-                os.waitpid(child, 0)
-            except ChildProcessError:
-                pass
+        os.close(self_descriptor)
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise AuthoringError("scope child-observation probe exceeded its time budget")
+    observation_deadline = deadline - min(0.5, remaining / 4)
+    words = [os.fsencode(sys.executable), b"-I", b"-S", b"-B", b"-X", b"utf8",
+             b"-c", b"import os; os.setsid(); os._exit(0)"]
+    arguments = (ctypes_module.c_char_p * (len(words) + 1))(*words, None)
+    environment = (ctypes_module.c_char_p * 3)(b"PATH=/usr/bin:/bin", b"LC_ALL=C.UTF-8", None)
+    returned_descriptor = ctypes_module.c_int(-1)
+    status = spawn(ctypes_module.byref(returned_descriptor), words[0], None, None,
+                   arguments, environment)
+    if status:
+        raise AuthoringError(f"scope child-observation probe could not start: {os.strerror(status)}")
+    descriptor = returned_descriptor.value
+    if descriptor < 0:
+        raise AuthoringError("scope child-observation probe returned no owned process descriptor")
+    reaped = False
+    observed_exit = None
+    try:
+        try:
+            while True:
+                remaining = observation_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise AuthoringError("scope child-observation probe exceeded its time budget")
+                observed = os.waitid(descriptor_type, descriptor,
+                                     os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                if observed is not None:
+                    observed_exit = observed
+                    break
+                time.sleep(min(0.01, remaining))
+            repeated = os.waitid(descriptor_type, descriptor,
+                                 os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            if (observed.si_code != os.CLD_EXITED or observed.si_status != 0
+                    or repeated != observed):
+                raise AuthoringError("scope child-observation probe did not preserve a waitable exit")
+            numeric_observation = os.waitid(os.P_PID, observed.si_pid,
+                                           os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            if numeric_observation != observed:
+                raise AuthoringError("scope diagnostic leader observation is unavailable")
+            # Exercise the exact cleanup signal on an already observed, unreaped
+            # exit: refusal cannot strand a deliberately stopped probe.
+            if send_signal(descriptor, signal.SIGKILL, None, 0) < 0:
+                raise AuthoringError("scope native process-descriptor termination is unavailable")
+            if os.waitid(descriptor_type, descriptor,
+                         os.WEXITED | os.WNOHANG | os.WNOWAIT) != observed:
+                raise AuthoringError("scope signal probe did not preserve its waitable exit")
+            # The fixed probe created its own session. Its unreaped, FD-observed
+            # leader pins this group identity while the helper's exact killpg
+            # syscall is exercised against the already-exited probe group.
+            if (os.getpgid(observed.si_pid) != observed.si_pid
+                    or os.getsid(observed.si_pid) != observed.si_pid):
+                raise AuthoringError("scope probe has no verified independent process group")
+            os.killpg(observed.si_pid, signal.SIGKILL)
+            if os.waitid(descriptor_type, descriptor,
+                         os.WEXITED | os.WNOHANG | os.WNOWAIT) != observed:
+                raise AuthoringError("scope group signal probe lost its waitable exit")
+            waited = os.waitid(descriptor_type, descriptor, os.WEXITED | os.WNOHANG)
+            if waited != observed:
+                raise AuthoringError("scope child-observation probe did not reap its original exit")
+            reaped = True
+        except OSError as exc:
+            raise AuthoringError(f"scope non-reaping child observation is unavailable: {exc}") from exc
+    finally:
+        try:
+            if not reaped:
+                if observed_exit is None and send_signal(descriptor, signal.SIGKILL, None, 0) < 0:
+                    error = ctypes_module.get_errno()
+                    if error != errno.ESRCH:
+                        raise AuthoringError("scope child-observation probe termination is unconfirmed")
+                while True:
+                    try:
+                        waited = os.waitid(descriptor_type, descriptor, os.WEXITED | os.WNOHANG)
+                    except ChildProcessError:
+                        reaped = True
+                        break
+                    if waited is not None:
+                        reaped = True
+                        break
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise AuthoringError("scope child-observation probe cleanup exceeded its time budget")
+                    time.sleep(min(0.01, remaining))
+        finally:
+            os.close(descriptor)
 
 
-def _scope_candidate_report(root: Path, paths: list[str], profile: str) -> str:
+def _scope_candidate_report(root: Path, paths: list[str], profile: str, deadline: float) -> str:
     import selectors
     import signal
     import subprocess
     import time
 
+    remaining = max(0.0, deadline - time.monotonic())
+    work_deadline = deadline - min(0.5, remaining / 4)
     helper = Path(__file__).resolve().with_name("plan_scope_candidates.py")
     if not helper.is_file() or helper.is_symlink():
         raise AuthoringError("scope candidate helper is unavailable")
-    required = ("fork", "waitpid", "waitid", "P_PID", "WEXITED", "WNOHANG", "WNOWAIT", "CLD_EXITED")
-    if not all(hasattr(os, name) for name in required):
-        raise AuthoringError("scope diagnostic requires non-reaping POSIX child observation")
-    if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
-        raise AuthoringError("scope diagnostic requires default SIGCHLD ownership")
 
     # These are runtime roles, not filename exclusions from the data reader.
     runtime_paths = {helper.resolve(), Path(__file__).resolve()}
-    for filename in [sys.argv[0], *(getattr(module, "__file__", None)
-                                    for module in tuple(sys.modules.values()))]:
-        if isinstance(filename, str):
-            try:
-                runtime_paths.add(Path(filename).resolve(strict=True))
-            except (OSError, RuntimeError, ValueError):
-                pass
+    runtime_files = [sys.argv[0], sys.executable]
+    for module in tuple(sys.modules.values()):
+        if module is None:
+            continue
+        try:
+            # Stored metadata must not invoke a lazy module's attribute hooks.
+            namespace = ModuleType.__dict__["__dict__"].__get__(module, ModuleType)
+        except (AttributeError, TypeError):
+            continue
+        runtime_files.extend((namespace.get("__file__"), namespace.get("__cached__")))
+    for filename in runtime_files:
+        if filename is None:
+            continue
+        if type(filename) is bytes:
+            filename = os.fsdecode(filename)
+        elif type(filename) is not str:
+            raise AuthoringError("scope diagnostic runtime metadata path is unsupported")
+        try:
+            runtime_paths.add(Path(filename).resolve(strict=True))
+        except (OSError, RuntimeError, ValueError):
+            pass
     runtime_identities = set()
     for path in runtime_paths:
         try:
@@ -1549,8 +1671,6 @@ def _scope_candidate_report(root: Path, paths: list[str], profile: str) -> str:
         except OSError:
             pass
     for relative in paths:
-        if not relative.endswith(".py"):
-            continue
         target = root / relative
         try:
             metadata = target.stat(follow_symlinks=False)
@@ -1588,11 +1708,9 @@ def _scope_candidate_report(root: Path, paths: list[str], profile: str) -> str:
                 pass
             group_signalled = True
 
-    deadline = time.monotonic() + SCOPE_DIAGNOSTIC_TIMEOUT
-    _probe_scope_child_observation(deadline)
     try:
         process = subprocess.Popen(
-            [sys.executable, "-I", "-B", "-X", "utf8", str(helper)],
+            [sys.executable, "-I", "-S", "-B", "-X", "utf8", str(helper), str(root), *paths],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env={"PATH": os.defpath, "LC_ALL": "C"}, cwd=root,
             start_new_session=True, bufsize=0,
@@ -1612,7 +1730,7 @@ def _scope_candidate_report(root: Path, paths: list[str], profile: str) -> str:
                     leader_state = observe_leader()
                 if leader_state is not None:
                     terminate_owned_group()
-                remaining = deadline - time.monotonic()
+                remaining = work_deadline - time.monotonic()
                 if remaining <= 0:
                     raise AuthoringError("scope diagnostic exceeded its time budget")
                 interval = remaining if leader_state is not None else min(0.01, remaining)
@@ -1644,7 +1762,7 @@ def _scope_candidate_report(root: Path, paths: list[str], profile: str) -> str:
                         raise AuthoringError("scope diagnostic exceeded its stderr byte budget")
                     buffers[name].extend(chunk)
         while leader_state is None:
-            remaining = deadline - time.monotonic()
+            remaining = work_deadline - time.monotonic()
             if remaining <= 0:
                 raise AuthoringError("scope diagnostic exceeded its time budget")
             leader_state = observe_leader()
@@ -1656,11 +1774,23 @@ def _scope_candidate_report(root: Path, paths: list[str], profile: str) -> str:
         if process is not None:
             # WNOWAIT keeps the leader's PID owned until residual-group cleanup
             # finishes, even after a successful exit with all pipes closed.
-            if process.returncode is None:
-                terminate_owned_group()
-                process.wait()
-            for stream in (process.stdin, process.stdout, process.stderr):
-                stream.close()
+            try:
+                if process.returncode is None and group_owned:
+                    terminate_owned_group()
+                    while True:
+                        observed = observe_leader()
+                        if observed is not None:
+                            process.wait(timeout=0)
+                            break
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise AuthoringError("scope diagnostic group cleanup exceeded its time budget")
+                        time.sleep(min(0.01, remaining))
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise AuthoringError("scope diagnostic owned-child cleanup is unconfirmed") from exc
+            finally:
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    stream.close()
     if process.returncode:
         detail = buffers["stderr"].decode("utf-8", "replace").strip().splitlines()
         raise AuthoringError(
@@ -1681,6 +1811,8 @@ def check_authoring_input(
     document = build_document(parse_input(raw), profile=profile, interface=interface)
     reject_symlinked_declared_paths(root, document)
     read_index_rows(root)
+    if scope_candidates:
+        scope_deadline = _scope_child_observation_deadline()
     plan_id = reserve_plan_identifier(root, document, digest)
     relative = plan_relative_path(document, plan_id)
     if (root / relative).exists():
@@ -1691,7 +1823,7 @@ def check_authoring_input(
         # The ordinary human report can also contain admitted Unicode line
         # separators; do not let those inject diagnostic-prefixed records.
         report = report.translate({0x85: r"\u0085", 0x2028: r"\u2028", 0x2029: r"\u2029"})
-        report += _scope_candidate_report(root, document["write_scope"], profile)
+        report += _scope_candidate_report(root, document["write_scope"], profile, scope_deadline)
     return digest, report
 
 

@@ -4,7 +4,10 @@ import fcntl
 import hashlib
 import json
 import os
+import py_compile
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -23,6 +26,20 @@ def _python_source_rows(report: str) -> list[dict]:
     prefix = "python-source-observation: "
     return [json.loads(line.removeprefix(prefix)) for line in report.splitlines()
             if line.startswith(prefix)]
+
+def _instrumented_scope_cli(program: str, arguments: list[str], root: Path):
+    command = [sys.executable, "-I", "-B", "-c", program, *arguments]
+    process = subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        # Hold and verify the original fixture leader before signalling its group.
+        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate(timeout=5)
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 def _scope_cli(script: Path, profile: str, root: Path, source: Path, *, inspect: bool = True):
     command = [sys.executable, "-B", str(script), "--root", str(root), "check"]
@@ -561,6 +578,128 @@ def _exercise_scope_success_group_cli(script: Path, profile: str, *, closed_stdi
                     pass
 
 
+def _exercise_shared_runtime_role_refusal(helper: Path, profile: str) -> None:
+    import sysconfig
+
+    program = (
+        'import importlib.util,json,os,runpy,sys\n'
+        'from pathlib import Path\n'
+        'helper,root,profile,role,module_path,cache,target=sys.argv[1:]\n'
+        'renderer=runpy.run_path(helper)["render_candidates"]\n'
+        "if role in ('loaded_module_source','loaded_module_cache'):\n"
+        "    spec=importlib.util.spec_from_file_location('shared_runtime_fixture',module_path)\n"
+        '    module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)\n'
+        '    assert module.VALUE==1\n'
+        'runtime=(sys.executable if role=="interpreter_image" else helper if role=="helper_source" else module_path if role=="loaded_module_source" else cache)\n'
+        'os.link(runtime,target)\n'
+        'refused=False\n'
+        'try:renderer(Path(root),["data/runtime.bin"],profile)\n'
+        'except (ValueError,ImportError):refused=True\n'
+        'print(json.dumps({"refused":refused}))\n'
+    )
+    for role in ("interpreter_image", "helper_source", "loaded_module_source", "loaded_module_cache"):
+        with tempfile.TemporaryDirectory(prefix="shared-runtime-role-") as temporary:
+            base = Path(temporary)
+            selected = base / "analyzer/helper.py"
+            selected.parent.mkdir()
+            shutil.copyfile(helper, selected)
+            root = base / "project"
+            (root / "data").mkdir(parents=True)
+            target = root / "data/runtime.bin"
+            runtime = base / "runtime"
+            module_path = runtime / "module.py"
+            cache = runtime / "unused.pyc"
+            if role == "interpreter_image":
+                venv.EnvBuilder(with_pip=False, symlinks=False).create(runtime)
+                python = runtime / "bin/python"
+                assert not python.is_symlink()
+                if sysconfig.get_config_var("Py_ENABLE_SHARED"):
+                    library_name = sysconfig.get_config_var("INSTSONAME")
+                    shutil.copyfile(Path(sysconfig.get_config_var("LIBDIR")) / library_name,
+                                    runtime / "lib" / library_name)
+                original = python
+            elif role == "helper_source":
+                python = Path(sys.executable)
+                original = selected
+            else:
+                python = Path(sys.executable)
+                runtime.mkdir()
+                module_path.write_text("VALUE=1\n")
+                cache = Path(py_compile.compile(str(module_path), doraise=True))
+                original = module_path if role == "loaded_module_source" else cache
+            before = original.read_bytes()
+            result = subprocess.run(
+                [str(python), "-I", "-B", "-c", program, str(selected), str(root), profile,
+                 role, str(module_path), str(cache), str(target)],
+                cwd=root, capture_output=True, text=True, timeout=10,
+            )
+            assert result.returncode == 0, (profile, role, result.stderr)
+            assert json.loads(result.stdout)["refused"] is True, (profile, role, result.stdout)
+            assert target.read_bytes() == before, (profile, role)
+
+
+def _exercise_runtime_metadata_paths(script: Path, helper: Path, profile: str) -> None:
+    program = (
+        'import contextlib,importlib.util,io,json,os,runpy,sys\n'
+        'from pathlib import Path\n'
+        'script,helper,root,profile,source,module_path,cache,target,marker,consumer,field,representation=sys.argv[1:]\n'
+        'sys.path.insert(0,os.path.dirname(script))\n'
+        'entry=runpy.run_path(script,run_name="owned_typed_entry")\n'
+        'sys.modules["owned_blocked_metadata_fixture"]=None\n'
+        'renderer=runpy.run_path(helper)["render_candidates"]\n'
+        'spec=importlib.util.spec_from_file_location("typed_runtime_fixture",module_path)\n'
+        'module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)\n'
+        'args=["--root",root,"check"]+(["--profile",profile] if profile=="generated" else [])+["--input",source]\n'
+        'with contextlib.redirect_stdout(io.StringIO()):\n'
+        '    if consumer=="cli":control=entry["main"](args+["--scope-candidates"])\n'
+        '    else:renderer(Path(root),["src/runtime.bin"],profile);control=0\n'
+        'origin=module_path if field=="__file__" else cache\n'
+        'class MetadataPath:\n'
+        '    def __fspath__(self):Path(marker).write_text("coercion");return origin\n'
+        'class MetadataString(str):\n'
+        '    def __str__(self):Path(marker).write_text("string dispatch");return origin\n'
+        '    def __fspath__(self):Path(marker).write_text("path dispatch");return origin\n'
+        'value=os.fsencode(origin) if representation=="bytes" else MetadataPath() if representation=="pathlike" else MetadataString(origin)\n'
+        'module.__file__=None;module.__cached__=None;setattr(module,field,value)\n'
+        'os.link(origin,target)\n'
+        'with contextlib.redirect_stdout(io.StringIO()):ordinary=entry["main"](args+["--print-digest"])\n'
+        'refused=False\n'
+        'try:\n'
+        '    with contextlib.redirect_stdout(io.StringIO()):\n'
+        '        if consumer=="cli":refused=entry["main"](args+["--scope-candidates"])==1\n'
+        '        else:renderer(Path(root),["src/runtime.bin"],profile)\n'
+        'except (ValueError,ImportError):refused=True\n'
+        'print(json.dumps({"control":control,"ordinary":ordinary,"refused":refused,"callback":Path(marker).exists()}))\n'
+    )
+    for consumer in ("cli", "shared"):
+        for field in ("__file__", "__cached__"):
+            for representation in ("bytes", "pathlike", "str_subclass"):
+                with tempfile.TemporaryDirectory(prefix="typed-runtime-role-") as temporary:
+                    base = Path(temporary)
+                    root = base / "project"
+                    _, source = PlanAuthoringTest().scope_fixture(root, "src/runtime.bin", profile)
+                    target = root / "src/runtime.bin"
+                    target.parent.mkdir()
+                    module_path = base / "runtime.py"
+                    module_path.write_text("VALUE=1\n")
+                    cache = Path(py_compile.compile(str(module_path), doraise=True))
+                    original = module_path if field == "__file__" else cache
+                    before = original.read_bytes()
+                    marker = base / "metadata-callback"
+                    result = subprocess.run(
+                        [sys.executable, "-I", "-B", "-c", program, str(script), str(helper),
+                         str(root), profile, str(source), str(module_path), str(cache),
+                         str(target), str(marker), consumer, field, representation],
+                        cwd=root, capture_output=True, text=True, timeout=10,
+                    )
+                    case = (profile, consumer, field, representation)
+                    assert result.returncode == 0, (case, result.stderr)
+                    observed = json.loads(result.stdout)
+                    assert observed["control"] == 0 and observed["ordinary"] == 0, (case, observed)
+                    assert observed["refused"] is True and observed["callback"] is False, (case, observed)
+                    assert target.read_bytes() == before, case
+
+
 def _installed_scope_observation_case(project: Path) -> None:
     _exercise_python_source_cli(
         project / ".project-agent-workflow/scripts/plan_authoring.py", "generated"
@@ -579,6 +718,13 @@ def _installed_scope_observation_case(project: Path) -> None:
             project / ".project-agent-workflow/scripts/plan_authoring.py",
             "generated", closed_stdio=closed_stdio,
         )
+    _exercise_shared_runtime_role_refusal(
+        project / ".project-agent-workflow/scripts/plan_scope_candidates.py", "generated"
+    )
+    _exercise_runtime_metadata_paths(
+        project / ".project-agent-workflow/scripts/plan_authoring.py",
+        project / ".project-agent-workflow/scripts/plan_scope_candidates.py", "generated",
+    )
 
 class PlanAuthoringTest(unittest.TestCase):
     @staticmethod
@@ -1995,6 +2141,691 @@ class PlanAuthoringTest(unittest.TestCase):
         for field in ("decisions", "tasks", "validation_notes", "integration_gates"):
             for clause in data[field]:
                 self.assertIn(clause, rendered)
+
+    @staticmethod
+    def _scope_runtime(runtime: Path) -> tuple[Path, Path]:
+        """Own interpreter files and writable directories without changing the installed runtime."""
+        import sysconfig
+
+        (runtime / "bin").mkdir(parents=True)
+        (runtime / "lib").mkdir()
+        python = runtime / "bin/python"
+        shutil.copyfile(Path(sys.executable).resolve(), python)
+        python.chmod(0o700)
+        if sysconfig.get_config_var("Py_ENABLE_SHARED"):
+            library_name = sysconfig.get_config_var("INSTSONAME")
+            shutil.copyfile(Path(sysconfig.get_config_var("LIBDIR")) / library_name,
+                            runtime / "lib" / library_name)
+        stdlib = runtime / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        stdlib.mkdir()
+        for original in Path(sysconfig.get_path("stdlib")).iterdir():
+            copied = stdlib / original.name
+            if original.name in ("__pycache__", "site-packages"):
+                copied.mkdir()
+            else:
+                copied.symlink_to(original, target_is_directory=original.is_dir())
+        (stdlib / "site-packages").mkdir(exist_ok=True)
+        return python, stdlib
+
+    def test_plain_root_checks_do_not_create_ignored_command_bytecode(self):
+        for inspect in (False, True):
+            with self.subTest(inspect=inspect), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                _, source = self.scope_fixture(root, "src/a.py")
+                selected = _copy_scope_cli(root, "root", ROOT_COMMAND)
+                target = root / "src/a.py"
+                target.parent.mkdir()
+                target.write_text("value = 1\n")
+                (root / ".gitignore").write_text("__pycache__/\n*.pyc\n")
+                before = {str(path.relative_to(root)): (None if path.is_dir() else path.read_bytes())
+                          for path in root.rglob("*")}
+                environment = os.environ.copy()
+                for key in ("PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX", "PYTHONPATH"):
+                    environment.pop(key, None)
+                command = [sys.executable, str(selected), "--root", str(root), "check", "--input", str(source)]
+                if inspect:
+                    command.append("--scope-candidates")
+                result = subprocess.run(command, cwd=root, env=environment,
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(["src/a.py"] if inspect else [],
+                                 [row["path"] for row in _python_source_rows(result.stdout)])
+                self.assertEqual(before, {str(path.relative_to(root)): (None if path.is_dir() else path.read_bytes())
+                                          for path in root.rglob("*")})
+
+    def test_scope_bootstrap_physical_alias_refuses_non_python_suffix(self):
+        program = (
+            'import os,runpy,sys\n'
+            'from pathlib import Path\n'
+            'script,root,profile,source,helper,effect=sys.argv[1:]\n'
+            'sys.path.insert(0,os.path.dirname(script))\n'
+            'def audit(event,args):\n'
+            "    if event=='subprocess.Popen' and helper in args[1]: Path(effect).write_text('started')\n"
+            'sys.addaudithook(audit)\n'
+            "sys.argv=[script,'--root',root,'check']+(['--profile',profile] if profile=='generated' else [])+['--input',source,'--scope-candidates']\n"
+            "runpy.run_path(script,run_name='__main__')\n"
+        )
+        for profile, script in (
+            ("root", ROOT_COMMAND),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py"),
+        ):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                selected = _copy_scope_cli(base / "tools", profile, script)
+                helper = selected.parent / ("project_workflow/plan_scope_candidates.py"
+                                            if profile == "root" else "plan_scope_candidates.py")
+                root = base / "project"
+                _, source = self.scope_fixture(root, "data/alias.bin", profile)
+                target = root / "data/alias.bin"
+                target.parent.mkdir()
+                os.link(helper, target)
+                effect = base / "helper-started"
+                before = {str(path.relative_to(root)): path.read_bytes()
+                          for path in root.rglob("*") if path.is_file()}
+                result = _instrumented_scope_cli(
+                    program, [str(selected), str(root), profile, str(source),
+                              str(helper), str(effect)], root)
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse(effect.exists())
+                self.assertEqual(before, {str(path.relative_to(root)): path.read_bytes()
+                                          for path in root.rglob("*") if path.is_file()})
+
+    def test_scope_child_bootstrap_never_executes_declared_cold_dependency(self):
+        program = (
+            'import os,runpy,sys\n'
+            'from pathlib import Path\n'
+            'script,root,profile,source,python,helper,effect,marker=sys.argv[1:]\n'
+            'sys.path.insert(0,os.path.dirname(script));sys.executable=python\n'
+            'assert not Path(marker).exists()\n'
+            'def audit(event,args):\n'
+            "    if event=='subprocess.Popen' and helper in args[1]: Path(effect).write_text('started')\n"
+            'sys.addaudithook(audit)\n'
+            "sys.argv=[script,'--root',root,'check']+(['--profile',profile] if profile=='generated' else [])+['--input',source,'--scope-candidates']\n"
+            "runpy.run_path(script,run_name='__main__')\n"
+        )
+        for profile, script in (
+            ("root", ROOT_COMMAND),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py"),
+        ):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                selected = _copy_scope_cli(base / "tools", profile, script)
+                helper = selected.parent / ("project_workflow/plan_scope_candidates.py"
+                                            if profile == "root" else "plan_scope_candidates.py")
+                root = base / "project"
+                _, source = self.scope_fixture(root, "data/ast-alias.bin", profile)
+                python, stdlib = self._scope_runtime(base / "runtime")
+                marker = base / "cold-dependency-executed"
+                dependency = stdlib / "ast.py"
+                dependency.unlink()  # Remove only this fixture-owned link before replacing it.
+                dependency.write_text("from pathlib import Path\n"
+                                      + f"Path({str(marker)!r}).write_text('executed')\n"
+                                      + "raise ImportError('controlled cold dependency')\n")
+                target = root / "data/ast-alias.bin"
+                target.parent.mkdir()
+                os.link(dependency, target)
+                effect = base / "actual-helper-started"
+                before = target.read_bytes()
+                result = _instrumented_scope_cli(
+                    program, [str(selected), str(root), profile, str(source), str(python),
+                              str(helper), str(effect), str(marker)], root)
+                self.assertNotEqual(0, result.returncode)
+                self.assertTrue(effect.exists())
+                self.assertFalse(marker.exists())
+                self.assertEqual(before, target.read_bytes())
+
+    def test_scope_child_guard_remains_active_through_interpreter_shutdown(self):
+        program = (
+            'import os,runpy,sys\n'
+            'from pathlib import Path\n'
+            'script,root,profile,source,python,helper,effect,marker=sys.argv[1:]\n'
+            'sys.path.insert(0,os.path.dirname(script));sys.executable=python\n'
+            'assert not Path(marker).exists()\n'
+            'def audit(event,args):\n'
+            "    if event=='subprocess.Popen' and helper in args[1]: Path(effect).write_text('started')\n"
+            'sys.addaudithook(audit)\n'
+            "sys.argv=[script,'--root',root,'check']+(['--profile',profile] if profile=='generated' else [])+['--input',source,'--scope-candidates']\n"
+            "runpy.run_path(script,run_name='__main__')\n"
+        )
+        for profile, script in (
+            ("root", ROOT_COMMAND),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py"),
+        ):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                selected = _copy_scope_cli(base / "tools", profile, script)
+                helper = selected.parent / ("project_workflow/plan_scope_candidates.py"
+                                            if profile == "root" else "plan_scope_candidates.py")
+                root = base / "project"
+                _, source = self.scope_fixture(root, "data/exit-alias.bin", profile)
+                python, stdlib = self._scope_runtime(base / "runtime")
+                marker = base / "shutdown-dependency-executed"
+                attempt = base / "shutdown-import-attempted"
+                packages = stdlib / "site-packages"
+                (packages / "sitecustomize.py").write_text(
+                    "import atexit\nfrom pathlib import Path\n"
+                    + "def late_scope_import():\n"
+                    + f"    Path({str(attempt)!r}).write_text('attempted')\n"
+                    + "    __import__('scope_exit_dependency')\n"
+                    + "atexit.register(late_scope_import)\n")
+                dependency = packages / "scope_exit_dependency.py"
+                dependency.write_text("from pathlib import Path\n"
+                                      + f"Path({str(marker)!r}).write_text('executed')\n"
+                                      )
+                target = root / "data/exit-alias.bin"
+                target.parent.mkdir()
+                os.link(dependency, target)
+                effect = base / "actual-helper-started"
+                before = target.read_bytes()
+                result = _instrumented_scope_cli(
+                    program, [str(selected), str(root), profile, str(source), str(python),
+                              str(helper), str(effect), str(marker)], root)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertTrue(effect.exists())
+                self.assertTrue(attempt.exists())
+                self.assertFalse(marker.exists())
+                self.assertEqual(before, target.read_bytes())
+
+    def test_scope_future_runtime_aliases_do_not_execute_declared_data(self):
+        for profile, script in (
+            ("root", ROOT_COMMAND),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py"),
+        ):
+            for form in ("hardlink", "runtime_symlink", "sourceless_bytecode"):
+                with self.subTest(profile=profile, form=form), tempfile.TemporaryDirectory() as temporary:
+                    base = Path(temporary)
+                    root = base / "project"
+                    _, source = self.scope_fixture(root, "src/alias.py", profile)
+                    target = root / "src/alias.py"
+                    target.parent.mkdir()
+                    runtime = base / "runtime"
+                    venv.EnvBuilder(with_pip=False, symlinks=True).create(runtime)
+                    python = runtime / "bin/python"
+                    metadata = subprocess.run(
+                        [str(python), "-I", "-B", "-c", "import sysconfig;print(sysconfig.get_path('purelib'))"],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    self.assertEqual(0, metadata.returncode, metadata.stderr)
+                    module = Path(metadata.stdout.strip()) / "yaml.py"
+                    marker = base / "runtime-data-executed"
+                    raw = ("from pathlib import Path\n"
+                           + f"Path({str(marker)!r}).write_text('executed')\n"
+                           + "raise ImportError('runtime alias fixture')\n").encode()
+                    module.write_bytes(raw)
+                    if form == "hardlink":
+                        os.link(module, target)
+                    elif form == "runtime_symlink":
+                        target.write_bytes(raw)
+                        module.unlink()
+                        module.symlink_to(target)
+                    else:
+                        compiled = module.with_suffix(".pyc")
+                        py_compile.compile(str(module), cfile=str(compiled),
+                                           dfile="/nonexistent/runtime-source.py", doraise=True)
+                        module.unlink()
+                        os.link(compiled, target)
+                    before = {str(path.relative_to(root)): path.read_bytes()
+                              for path in root.rglob("*") if path.is_file()}
+                    command = [str(python), "-I", "-B", str(script), "--root", str(root), "check"]
+                    if profile == "generated":
+                        command.extend(["--profile", profile])
+                    result = subprocess.run(command + ["--input", str(source), "--scope-candidates"],
+                                            cwd=root, capture_output=True, text=True, timeout=10)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    row, = _python_source_rows(result.stdout)
+                    self.assertEqual("src/alias.py", row["path"])
+                    self.assertEqual("parsed" if form == "runtime_symlink" else "unknown", row["status"])
+                    self.assertFalse(marker.exists())
+                    self.assertEqual(before, {str(path.relative_to(root)): path.read_bytes()
+                                              for path in root.rglob("*") if path.is_file()})
+
+    def test_scope_runtime_metadata_paths_refuse_without_custom_dispatch(self):
+        for profile, script, helper in (
+            ("root", ROOT_COMMAND, ROOT / "scripts/project_workflow/plan_scope_candidates.py"),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py",
+             ROOT / "template/.project-agent-workflow/scripts/plan_scope_candidates.py"),
+        ):
+            with self.subTest(profile=profile):
+                _exercise_runtime_metadata_paths(script, helper, profile)
+
+    def test_scope_shared_renderer_refuses_known_runtime_data_aliases(self):
+        for profile, helper in (
+            ("root", ROOT / "scripts/project_workflow/plan_scope_candidates.py"),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_scope_candidates.py"),
+        ):
+            with self.subTest(profile=profile):
+                _exercise_shared_runtime_role_refusal(helper, profile)
+
+    def test_scope_known_interpreter_and_loaded_cache_refuse_data_aliases(self):
+        import sysconfig
+
+        program = (
+            'import importlib.util,os,runpy,sys\n'
+            'from pathlib import Path\n'
+            'script,root,profile,source,helper,effect,role,module_path,cache,opened=sys.argv[1:]\n'
+            'def audit(event,args):\n'
+            "    if event=='subprocess.Popen' and helper in args[1]: Path(effect).write_text('started')\n"
+            "    if role=='loaded_module_cache' and event=='open' and isinstance(args[0],str) and args[0]==cache: Path(opened).write_text('read')\n"
+            'sys.addaudithook(audit)\n'
+            "if role=='loaded_module_cache':\n"
+            "    spec=importlib.util.spec_from_file_location('known_bootstrap_fixture',module_path)\n"
+            '    module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)\n'
+            '    assert module.__cached__==cache and module.VALUE==1\n'
+            'sys.path.insert(0,os.path.dirname(script))\n'
+            "sys.argv=[script,'--root',root,'check']+(['--profile',profile] if profile=='generated' else [])+['--input',source,'--scope-candidates']\n"
+            "runpy.run_path(script,run_name='__main__')\n"
+        )
+        for profile, script in (
+            ("root", ROOT_COMMAND),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py"),
+        ):
+            for role in ("interpreter_image", "loaded_module_cache"):
+                with self.subTest(profile=profile, role=role), tempfile.TemporaryDirectory() as temporary:
+                    base = Path(temporary)
+                    selected = _copy_scope_cli(base / "tools", profile, script)
+                    helper = selected.parent / ("project_workflow/plan_scope_candidates.py"
+                                                if profile == "root" else "plan_scope_candidates.py")
+                    root = base / "project"
+                    _, source = self.scope_fixture(root, "data/runtime.bin", profile)
+                    target = root / "data/runtime.bin"
+                    target.parent.mkdir()
+                    runtime = base / "runtime"
+                    module_path = runtime / "module.py"
+                    cache = runtime / "unused.pyc"
+                    if role == "interpreter_image":
+                        venv.EnvBuilder(with_pip=False, symlinks=False).create(runtime)
+                        python = runtime / "bin/python"
+                        self.assertFalse(python.is_symlink())
+                        if sysconfig.get_config_var("Py_ENABLE_SHARED"):
+                            library_name = sysconfig.get_config_var("INSTSONAME")
+                            library_source = Path(sysconfig.get_config_var("LIBDIR")) / library_name
+                            shutil.copyfile(library_source, runtime / "lib" / library_name)
+                        os.link(python, target)
+                    else:
+                        runtime.mkdir()
+                        module_path.write_text("VALUE=1\n")
+                        cache = Path(py_compile.compile(str(module_path), doraise=True))
+                        os.link(cache, target)
+                        python = Path(sys.executable)
+                    effect = base / "helper-started"
+                    opened = base / "loaded-cache-read"
+                    before = target.read_bytes()
+                    command = [str(python), "-I", "-B", "-c", program, str(selected),
+                               str(root), profile, str(source), str(helper), str(effect),
+                               role, str(module_path), str(cache), str(opened)]
+                    result = subprocess.run(command, cwd=root, capture_output=True,
+                                            text=True, timeout=10)
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertFalse(effect.exists())
+                    self.assertEqual(before, target.read_bytes())
+                    if role == "loaded_module_cache":
+                        self.assertTrue(opened.exists())
+
+    def test_scope_lost_leader_observation_refuses_without_waiting_for_input(self):
+        program = (
+            'import os,runpy,subprocess,sys\n'
+            'from pathlib import Path\n'
+            'library,root,profile,source,effect=sys.argv[1:]\n'
+            'sys.path.insert(0,os.path.dirname(library));module=runpy.run_path(library)\n'
+            "module['main'].__globals__['SCOPE_DIAGNOSTIC_TIMEOUT']=0.4\n"
+            "helper=str(Path(library).with_name('plan_scope_candidates.py'));real_popen=subprocess.Popen;real_waitid=os.waitid\n"
+            'def unavailable(kind,*args):\n'
+            "    if kind==os.P_PID: raise OSError(22,'child observation became unavailable')\n"
+            '    return real_waitid(kind,*args)\n'
+            'def launch(arguments,*args,**kwargs):\n'
+            '    if helper in arguments:\n'
+            "        Path(effect).write_text('started');os.waitid=unavailable\n"
+            '    return real_popen(arguments,*args,**kwargs)\n'
+            'subprocess.Popen=launch\n'
+            "raise SystemExit(module['main'](['--root',root,'check','--input',source,'--scope-candidates'],default_profile=profile))\n"
+        )
+        for profile, library in (
+            ("root", ROOT / "scripts/project_workflow/plan_authoring.py"),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py"),
+        ):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                root = base / "project"
+                _, source = self.scope_fixture(root, "src/a.py", profile)
+                target = root / "src/a.py"
+                target.parent.mkdir()
+                target.write_text("value = 1\n")
+                effect = base / "actual-helper-started"
+                before = target.read_bytes()
+                result = _instrumented_scope_cli(
+                    program, [str(library), str(root), profile, str(source), str(effect)], root)
+                self.assertNotEqual(0, result.returncode)
+                self.assertTrue(effect.exists())
+                self.assertEqual(before, target.read_bytes())
+
+    def test_scope_native_capability_refusals_precede_command_effects(self):
+        if sys.platform != "linux" or os.uname().machine != "x86_64":
+            self.skipTest("isolated native syscall-policy fixture requires Linux x86_64")
+        program = (
+            'import ctypes,errno,json,os,platform,runpy,signal,sys\n'
+            'from pathlib import Path\n'
+            'library,root,profile,source,effect,state_path,kind=sys.argv[1:]\n'
+            'sys.path.insert(0,os.path.dirname(library));module=runpy.run_path(library)\n'
+            "assert sys.platform=='linux' and platform.machine()=='x86_64'\n"
+            'native=ctypes.CDLL(None,use_errno=True)\n'
+            "if kind=='kernel_nocldwait':\n"
+            '    class Action(ctypes.Structure):\n'
+            "        _fields_=[('handler',ctypes.c_void_p),('mask',ctypes.c_ulong*16),('flags',ctypes.c_int),('restorer',ctypes.c_void_p)]\n"
+            '    assert ctypes.sizeof(Action)==152\n'
+            '    native.sigaction.argtypes=[ctypes.c_int,ctypes.POINTER(Action),ctypes.POINTER(Action)];native.sigaction.restype=ctypes.c_int\n'
+            '    prior=Action();assert native.sigaction(signal.SIGCHLD,None,ctypes.byref(prior))==0\n'
+            '    changed=Action.from_buffer_copy(prior);changed.flags|=2\n'
+            '    assert native.sigaction(signal.SIGCHLD,ctypes.byref(changed),None)==0\n'
+            '    assert signal.getsignal(signal.SIGCHLD)==signal.SIG_DFL\n'
+            'else:\n'
+            '    class Filter(ctypes.Structure):\n'
+            "        _fields_=[('code',ctypes.c_ushort),('jt',ctypes.c_ubyte),('jf',ctypes.c_ubyte),('k',ctypes.c_uint32)]\n"
+            '    class Program(ctypes.Structure):\n'
+            "        _fields_=[('length',ctypes.c_ushort),('filters',ctypes.POINTER(Filter))]\n"
+            "    if kind=='waitid_pid_denied':\n"
+            '        rows=[(0x20,0,0,0),(0x15,0,3,247),(0x20,0,0,16),(0x15,0,1,int(os.P_PID)),(0x06,0,0,0x00050000|errno.EINVAL),(0x06,0,0,0x7fff0000)]\n'
+            "    elif kind=='pidfd_signal_kill_denied':\n"
+            '        rows=[(0x20,0,0,0),(0x15,0,3,424),(0x20,0,0,24),(0x15,0,1,9),(0x06,0,0,0x00050000|errno.EPERM),(0x06,0,0,0x7fff0000)]\n'
+            "    elif kind=='kill_group_denied':\n"
+            '        rows=[(0x20,0,0,0),(0x15,0,1,62),(0x06,0,0,0x00050000|errno.EPERM),(0x06,0,0,0x7fff0000)]\n'
+            '    else:\n'
+            '        rows=[(0x20,0,0,0),(0x15,0,1,424),(0x06,0,0,0x00050000|errno.EPERM),(0x06,0,0,0x7fff0000)]\n'
+            '    filters=(Filter*len(rows))(*(Filter(*row) for row in rows));program=Program(len(rows),filters)\n'
+            '    native.prctl.argtypes=[ctypes.c_int,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong];native.prctl.restype=ctypes.c_int\n'
+            '    assert native.prctl(38,1,0,0,0)==0\n'
+            '    assert native.prctl(22,2,ctypes.addressof(program),0,0)==0\n'
+            "module['main'].__globals__['SCOPE_DIAGNOSTIC_TIMEOUT']=0.4\n"
+            'def audit(event,args):\n'
+            "    if event=='subprocess.Popen': Path(effect).write_text('started')\n"
+            'sys.addaudithook(audit)\n'
+            'try:\n'
+            "    code=module['main'](['--root',root,'check','--input',source,'--scope-candidates'],default_profile=profile)\n"
+            'finally:\n'
+            '    try:\n'
+            '        child,status=os.waitpid(-1,os.WNOHANG)\n'
+            "        state={'remaining_child':True,'observed_pid':child,'observed_status':status}\n"
+            '    except ChildProcessError:\n'
+            "        state={'remaining_child':False}\n"
+            '    Path(state_path).write_text(json.dumps(state))\n'
+            'raise SystemExit(code)\n'
+        )
+        for profile, library in (
+            ("root", ROOT / "scripts/project_workflow/plan_authoring.py"),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py"),
+        ):
+            for kind in ("waitid_pid_denied", "pidfd_signal_denied",
+                         "pidfd_signal_kill_denied", "kill_group_denied", "kernel_nocldwait"):
+                with self.subTest(profile=profile, kind=kind), tempfile.TemporaryDirectory() as temporary:
+                    base = Path(temporary)
+                    root = base / "project"
+                    _, source = self.scope_fixture(root, "src/a.py", profile)
+                    target = root / "src/a.py"
+                    target.parent.mkdir()
+                    target.write_text("value = 1\n")
+                    effect = base / "command-side-subprocess"
+                    state = base / "child-state.json"
+                    before = {str(path.relative_to(root)): path.read_bytes()
+                              for path in root.rglob("*") if path.is_file()}
+                    result = _instrumented_scope_cli(
+                        program, [str(library), str(root), profile, str(source),
+                                  str(effect), str(state), kind], root)
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertFalse(effect.exists())
+                    self.assertEqual({"remaining_child": False}, json.loads(state.read_text()))
+                    self.assertEqual(before, {str(path.relative_to(root)): path.read_bytes()
+                                              for path in root.rglob("*") if path.is_file()})
+
+    def test_scope_probe_is_not_held_by_caller_python_fork_callbacks(self):
+        for profile, library in (
+            ("root", ROOT / "scripts/project_workflow/plan_authoring.py"),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py"),
+        ):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                root = base / "project"
+                _, source = self.scope_fixture(root, "src/a.py", profile)
+                target = root / "src/a.py"
+                target.parent.mkdir()
+                target.write_text("value = 1\n")
+                marker = base / "held-fork-probe"
+                program = (
+                    "import os,runpy,signal,sys\nfrom pathlib import Path\n"
+                    "library,root,profile,source,marker=sys.argv[1:]\n"
+                    "def hold_child():\n"
+                    "    Path(marker).write_text(str(os.getpid()))\n"
+                    "    os.kill(os.getpid(),signal.SIGSTOP)\n"
+                    "os.register_at_fork(after_in_child=hold_child)\n"
+                    "sys.path.insert(0,os.path.dirname(library))\n"
+                    "module=runpy.run_path(library)\n"
+                    "module['main'].__globals__['SCOPE_DIAGNOSTIC_TIMEOUT']=1.0\n"
+                    "raise SystemExit(module['main'](['--root',root,'check','--input',source,"
+                    "'--scope-candidates'],default_profile=profile))\n"
+                )
+                before = target.read_bytes()
+                result = _instrumented_scope_cli(
+                    program, [str(library), str(root), profile, str(source), str(marker)], root)
+                self.assertEqual(0, result.returncode, result.stderr)
+                row, = _python_source_rows(result.stdout)
+                self.assertEqual(("src/a.py", "parsed"), (row["path"], row["status"]))
+                self.assertFalse(marker.exists())
+                self.assertEqual(before, target.read_bytes())
+
+    def test_scope_reader_permission_does_not_cross_threads(self):
+        program = (
+            'import importlib,json,os,py_compile,runpy,sys,threading\n'
+            'from pathlib import Path\n'
+            'helper,root,runtime,declared,profile,marker=sys.argv[1:]\n'
+            'root=Path(root);runtime=Path(runtime);runtime.mkdir();marker=Path(marker)\n'
+            'original=runtime/\'original.py\';original.write_text(\'from pathlib import Path\\nPath(\'+repr(str(marker))+\').write_text("executed")\\n\')\n'
+            "compiled=runtime/'yaml.pyc';py_compile.compile(str(original),cfile=str(compiled),dfile='/nonexistent/compiled-source.py',doraise=True);original.unlink()\n"
+            'target=root/declared;target.parent.mkdir(parents=True,exist_ok=True);os.link(compiled,target);before=target.read_bytes()\n'
+            "second_root=root.parent/'second-project';(second_root/'src').mkdir(parents=True)\n"
+            "(second_root/'src/plain.py').write_text('other = 1\\n')\n"
+            "module=runpy.run_path(helper);sys.path.insert(0,str(runtime));sys.modules.pop('yaml',None)\n"
+            'entered=threading.Event();release=threading.Event();errors=[];reports=[];original_open=os.open\n'
+            'def paused_open(path,flags,*args,**kwargs):\n'
+            "    if os.fspath(path)==target.name and kwargs.get('dir_fd') is not None and not entered.is_set():\n"
+            '        entered.set()\n'
+            "        if not release.wait(3): raise TimeoutError('owned acquisition did not resume')\n"
+            '    return original_open(path,flags,*args,**kwargs)\n'
+            'os.open=paused_open\n'
+            'def render():\n'
+            "    try: reports.append(module['render_candidates'](root,[declared],profile))\n"
+            '    except BaseException as exc: errors.append(type(exc).__name__)\n'
+            'worker=threading.Thread(target=render);worker.start();assert entered.wait(3)\n'
+            'second_module=runpy.run_path(helper)\n'
+            "second_status='not_started'\n"
+            'try:\n'
+            "    second_report=second_module['render_candidates'](second_root,['src/plain.py'],profile)\n"
+            "    second_rows=[json.loads(line.removeprefix('python-source-observation: ')) for line in second_report.splitlines() if line.startswith('python-source-observation: ')]\n"
+            "    assert len(second_rows)==1 and second_rows[0]['path']=='src/plain.py' and second_rows[0]['status']=='parsed'\n"
+            "    second_status='parsed'\n"
+            'except ImportError:\n'
+            "    second_status='conservative_refusal'\n"
+            'import_error=None\n'
+            "try: importlib.import_module('yaml')\n"
+            'except ImportError as exc: import_error=type(exc).__name__\n'
+            'finally:\n'
+            '    release.set();worker.join(3);os.open=original_open\n'
+            'assert not worker.is_alive()\n'
+            "print(json.dumps({'second_instance_status':second_status,'executed':marker.exists(),'import_error':import_error,'render_errors':errors,'render_completed':len(reports)==1,'source_unchanged':before==target.read_bytes()}))\n"
+        )
+        for profile, helper in (
+            ("root", ROOT / "scripts/project_workflow/plan_scope_candidates.py"),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_scope_candidates.py"),
+        ):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                root = base / "project"
+                root.mkdir()
+                declared = "copier.yml" if profile == "root" else ".project-agent-workflow/ownership.yaml"
+                result = _instrumented_scope_cli(
+                    program, [str(helper), str(root), str(base / "runtime"), declared,
+                              profile, str(base / "executed")], root)
+                self.assertEqual(0, result.returncode, result.stderr)
+                observed = json.loads(result.stdout)
+                self.assertFalse(observed["executed"])
+                self.assertEqual("ImportError", observed["import_error"])
+                self.assertEqual([], observed["render_errors"])
+                self.assertTrue(observed["render_completed"])
+                self.assertTrue(observed["source_unchanged"])
+
+    def test_scope_runtime_metadata_does_not_trigger_deferred_source(self):
+        program = (
+            'import importlib.util,os,runpy,sys\n'
+            'from pathlib import Path\n'
+            'script,root,profile,source,target,marker=sys.argv[1:]\n'
+            "spec=importlib.util.spec_from_file_location('deferred_runtime_fixture',target)\n"
+            'spec.loader=importlib.util.LazyLoader(spec.loader)\n'
+            'module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)\n'
+            'assert not Path(marker).exists()\n'
+            'sys.path.insert(0,os.path.dirname(script))\n'
+            "sys.argv=[script,'--root',root,'check']+(['--profile',profile] if profile=='generated' else [])+['--input',source,'--scope-candidates']\n"
+            "runpy.run_path(script,run_name='__main__')\n"
+        )
+        for profile, script in (
+            ("root", ROOT_COMMAND),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py"),
+        ):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                selected = _copy_scope_cli(base / "tools", profile, script)
+                root = base / "project"
+                _, source = self.scope_fixture(root, "src/deferred.py", profile)
+                target = root / "src/deferred.py"
+                target.parent.mkdir()
+                marker = base / "deferred-source-executed"
+                target.write_text("from pathlib import Path\n"
+                                  + f"Path({str(marker)!r}).write_text('executed')\n")
+                before = target.read_bytes()
+                result = _instrumented_scope_cli(
+                    program, [str(selected), str(root), profile, str(source),
+                              str(target), str(marker)], root)
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse(marker.exists())
+                self.assertEqual(before, target.read_bytes())
+
+        property_program = (
+            'import os,runpy,sys,types\n'
+            'from pathlib import Path\n'
+            'script,helper,root,profile,source,target,marker,consumer=sys.argv[1:]\n'
+            'sys.path.insert(0,os.path.dirname(script))\n'
+            'entry=runpy.run_path(script,run_name="owned_entry")\n'
+            'renderer=runpy.run_path(helper)["render_candidates"] if consumer=="shared" else None\n'
+            'class DeferredNamespace(types.ModuleType):\n'
+            '    @property\n'
+            '    def __dict__(self):\n'
+            '        Path(marker).write_text("unexpected metadata callback")\n'
+            '        raise RuntimeError("module namespace property executed")\n'
+            'module=DeferredNamespace("deferred_namespace_fixture");module.__file__=target\n'
+            'sys.modules[module.__name__]=module\n'
+            'if consumer=="shared":renderer(Path(root),["src/deferred.py"],profile)\n'
+            'else:raise SystemExit(entry["main"](["--root",root,"check"]+(["--profile",profile] if profile=="generated" else [])+["--input",source,"--scope-candidates"]))\n'
+        )
+        for profile, script in (
+            ("root", ROOT_COMMAND),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py"),
+        ):
+            for consumer in ("cli", "shared"):
+                with self.subTest(profile=profile, consumer=consumer), tempfile.TemporaryDirectory() as temporary:
+                    base = Path(temporary)
+                    selected = _copy_scope_cli(base / "tools", profile, script)
+                    helper = selected.parent / ("project_workflow/plan_scope_candidates.py"
+                                                if profile == "root" else "plan_scope_candidates.py")
+                    root = base / "project"
+                    _, source = self.scope_fixture(root, "src/deferred.py", profile)
+                    target = root / "src/deferred.py"
+                    target.parent.mkdir()
+                    marker = base / "namespace-property-executed"
+                    target.write_text("from pathlib import Path\n"
+                                      + f"Path({str(marker)!r}).write_text('executed')\n")
+                    before = target.read_bytes()
+                    result = _instrumented_scope_cli(
+                        property_program, [str(selected), str(helper), str(root), profile,
+                                           str(source), str(target), str(marker), consumer], root)
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertFalse(marker.exists())
+                    self.assertEqual(before, target.read_bytes())
+
+    def test_scope_stopped_native_probe_is_reaped_before_helper_launch(self):
+        for profile, library in (
+            ("root", ROOT / "scripts/project_workflow/plan_authoring.py"),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py"),
+        ):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                root = base / "project"
+                _, source = self.scope_fixture(root, "src/a.py", profile)
+                target = root / "src/a.py"
+                target.parent.mkdir()
+                target.write_text("value = 1\n")
+                probe = base / "stopped-probe"
+                helper = base / "helper-launched"
+                runtime = base / "held-runtime"
+                runtime.write_text("#!/bin/sh\nprintf '%s' $$ > " + shlex.quote(str(probe))
+                                   + "\nkill -STOP $$\nexit 0\n")
+                runtime.chmod(0o700)
+                program = (
+                    "import os,runpy,sys\nfrom pathlib import Path\n"
+                    "library,root,profile,source,runtime,helper=sys.argv[1:]\n"
+                    "sys.path.insert(0,os.path.dirname(library))\n"
+                    "module=runpy.run_path(library)\n"
+                    "module['main'].__globals__['SCOPE_DIAGNOSTIC_TIMEOUT']=1.0\n"
+                    "def audit(event,args):\n"
+                    "    if event=='subprocess.Popen' and str(Path(library).with_name("
+                    "'plan_scope_candidates.py')) in args[1]: Path(helper).write_text('started')\n"
+                    "sys.addaudithook(audit)\nsys.executable=runtime\n"
+                    "raise SystemExit(module['main'](['--root',root,'check','--input',source,"
+                    "'--scope-candidates'],default_profile=profile))\n"
+                )
+                before = {str(path.relative_to(root)): path.read_bytes()
+                          for path in root.rglob("*") if path.is_file()}
+                result = _instrumented_scope_cli(
+                    program, [str(library), str(root), profile, str(source), str(runtime), str(helper)], root)
+                self.assertNotEqual(0, result.returncode)
+                self.assertTrue(probe.exists())
+                self.assertFalse(helper.exists())
+                self.assertEqual("", result.stdout)
+                # The stopped fixed wrapper retains both captured streams until
+                # kernel termination, so communicate completing proves their closure.
+                self.assertEqual(before, {str(path.relative_to(root)): path.read_bytes()
+                                          for path in root.rglob("*") if path.is_file()})
+
+    def test_scope_unavailable_child_observation_precedes_command_effects(self):
+        for profile, library in (
+            ("root", ROOT / "scripts/project_workflow/plan_authoring.py"),
+            ("generated", ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py"),
+        ):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                root = base / "project"
+                _, source = self.scope_fixture(root, "src/a.py", profile)
+                target = root / "src/a.py"
+                target.parent.mkdir()
+                target.write_text("value = 1\n")
+                effect = base / "command-side-subprocess"
+                program = (
+                    "import os,runpy,sys\nfrom pathlib import Path\n"
+                    "library,root,profile,source,effect=sys.argv[1:]\n"
+                    "sys.path.insert(0,os.path.dirname(library))\n"
+                    "module=runpy.run_path(library)\n"
+                    "def unavailable(*args): raise OSError(22,'unavailable child observation')\n"
+                    "os.waitid=unavailable\n"
+                    "def audit(event,args):\n"
+                    "    if event=='subprocess.Popen': Path(effect).write_text('started')\n"
+                    "sys.addaudithook(audit)\n"
+                    "raise SystemExit(module['main'](['--root',root,'check','--input',source,"
+                    "'--scope-candidates'],default_profile=profile))\n"
+                )
+                before = {str(path.relative_to(root)): path.read_bytes()
+                          for path in root.rglob("*") if path.is_file()}
+                result = _instrumented_scope_cli(
+                    program, [str(library), str(root), profile, str(source), str(effect)], root)
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse(effect.exists())
+                self.assertEqual("", result.stdout)
+                self.assertEqual(before, {str(path.relative_to(root)): path.read_bytes()
+                                          for path in root.rglob("*") if path.is_file()})
 
 
 class PlanAuthoringInRepositoryTest(unittest.TestCase):

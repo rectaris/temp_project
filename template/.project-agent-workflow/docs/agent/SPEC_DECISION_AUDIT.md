@@ -140,18 +140,52 @@ Unknown targets retain null sets; empty parsed sets mean no observed consumer,
 not proof that runtime consumers are absent.
 
 Choose the analyzer code and Python runtime independently of untrusted inspected
-data. The diagnostic refuses a declared Python file overlapping the selected
-helper, entrypoint or known loaded module by path or file identity. Before
-metadata/YAML observation, the isolated child also refuses declared Python
-paths inside its actual stdlib/platstdlib/purelib/platlib directories, including
-packages it could import later. These refusals make no non-execution claim for
-an overlapping runtime. To inspect those same files,
+data. The diagnostic refuses a declared file overlapping the selected helper,
+entrypoint, interpreter executable or known module source/cache by path or file
+identity, regardless of its suffix. Stored module namespace metadata is read
+without invoking deferred module attribute hooks. Before metadata/YAML
+observation, the isolated child also refuses declared paths inside its actual
+stdlib/platstdlib/purelib/platlib directories, including later dependencies.
+The shared renderer applies the same known-role refusal before opening declared
+sources, using the built-in stored module namespace rather than subclass attributes.
+Stored runtime paths accept exact built-in strings and bytes; bytes use the
+filesystem codec. Other non-null representations refuse without custom coercion.
+An import-blocking `None` entry in `sys.modules` is not a runtime module and is skipped.
+These refusals make no non-execution claim for an overlapping runtime. To inspect
+those same files,
 invoke the Python check CLI from a separately accepted analyzer/runtime and pass
 the inspected project with the existing `--root` option.
 This is a runtime/data role boundary, not a filename exclusion: an external
 accepted analyzer still observes the declared tool files as data.
-It cannot make an untrusted bootstrap safe after that bootstrap has already run;
+For the command child, `-I -S -B` suppresses automatic site startup.
+Using only built-in modules, the existing identity guard activates before its
+file-backed dependency imports; site initialization then retains access to
+optional runtime dependencies.
+The existing JSON request must match the checked root/path list supplied for
+this early protection.
+Rendering restores the previous guard state, so the bootstrap-active child
+retains protection for subsequent ordinary exit callbacks; directly loaded
+renderers retain their own pre-call state.
+This cannot make an untrusted Python startup or helper safe after it has run;
 never start candidate tool code to authorize or inspect itself.
+
+During rendering, including direct calls to the shared renderer, a process-local
+Python audit guard compares attempted runtime opens, Python execution and native
+extension imports with the physical identities of explicitly declared data.
+Runtime-side symlinks and source-less bytecode aliases cannot bypass this check.
+Each loaded helper instance uses one lock to refuse its own concurrent or nested
+renders. Separately loaded instances have separate guards; their process audit
+hooks can impose additional conservative refusals. This is not a whole-process
+serialization or cross-instance-success guarantee.
+The descriptor-based reader grants a thread-local, single-use exception only to
+the exact path and flags of each open used for descriptor acquisition. Decode,
+hash computation, unrelated threads, imports and execution inherit no exception.
+Declared identity changes refuse the attempted runtime access rather than imply
+that unavailable data is empty.
+A rejected optional PyYAML import leaves its correspondence unknown.
+The independently selected bootstrap and runtime image must remain trusted and
+stable; these metadata checks are not a complete dependency-closure or filesystem
+race-isolation proof.
 
 The CLI runs the helper in an isolated, non-bytecode Python child with a minimal
 environment. The child excludes ordinary cwd/script-directory dependency-name
@@ -168,20 +202,46 @@ not only after EOF. It terminates residual group members while that leader
 identity is still held, drains buffered output, then reaps and preserves the
 leader's original exit status. An inherited open pipe does not turn success into
 a deadline failure.
-Before starting the diagnostic helper, a trusted immediate-exit child proves
-current `waitid`/`WNOWAIT` operation: its unchanged exit is observed twice without
-reaping, then explicitly reaped. Symbol availability and Python's default
-`SIGCHLD` metadata alone are insufficient; auto-reaping configurations such as
-`SA_NOCLDWAIT` refuse before the helper starts. The probe shares the same deadline.
+Before command-side Git discovery or plan-ID reservation, the optional diagnostic
+proves current child observation on a fixed immediate-exit Python probe.
+It requires Linux native `pidfd_spawn`, `pidfd_open`, `pidfd_send_signal`, actual
+`waitid(P_PIDFD)` and `waitid(P_PID)`, own-session creation and verified `killpg`
+support. Unavailable capability refuses only this diagnostic, not ordinary
+authoring or digest-only checks.
+GNU libc `pidfd_spawn` returns an owned process descriptor atomically with creation,
+so neither PID reuse nor failure to allocate a later handle grants signal authority.
+Before any child is created, descriptor signal0 is exercised against the caller.
+The fixed probe creates its own session and exits zero. That unchanged exit is
+observed twice with `WNOWAIT` and through the helper's `P_PID` observation form.
+The exact descriptor `SIGKILL` permission is exercised against the already exited,
+still-unreaped probe. Its PGID and SID must both equal that held original PID
+before the helper's exact `killpg(SIGKILL)` interface is exercised on the verified
+probe group. Only then is the unchanged exit explicitly reaped through its FD.
+These calls test current invocation and permission, not causal termination of an
+already exited probe or arbitrary state-sensitive or future policy stability.
+Symbol availability and Python's default `SIGCHLD` metadata alone are insufficient:
+auto-reaping configurations such as `SA_NOCLDWAIT` refuse before Git reservation or
+helper launch, including when the Python signal metadata still reports default.
+The probe reserves bounded cleanup time within the same 30-second deadline passed
+to the helper. A stopped probe is terminated and reaped through its process FD;
+the group-signal test requires its separate held session/group certificate.
+No blocking `waitpid`, raw clone or unverified numeric PID signalling is used.
+The helper likewise reserves cleanup time within that deadline. Final leader
+observation remains nonblocking; only an observed exit is reaped, with a
+zero-timeout wait rather than an unconditional blocking wait.
 The caller must retain exclusive child-reaping ownership during the operation.
-If helper observation loses that ownership, the diagnostic refuses and does not
-signal an unverified numeric process-group identity. No unsafe reap-then-kill
-fallback or complete runtime/OS-sandbox guarantee is introduced.
+If helper observation loses that ownership, the diagnostic closes its own pipes
+and refuses without an unbounded wait or signalling an unverified numeric group
+identity. A refusal with unconfirmed cleanup does not prove no member remains.
+No unsafe reap-then-kill fallback is introduced.
 The helper also bounds its complete serialized response to 8 MiB.
 A launch or diagnostic failure never falls back to in-process source loading.
-Ordinary checks, structural refusals, existing write behavior and Python
+Ordinary check results, structural refusals, existing write behavior and Python
 `--print-digest` output remain unchanged; digest-only checks suppress diagnostics.
-The generated shell accepts the option only with `--check`.
+Entry-point checks must not depend on a caller-supplied `-B` or inherited bytecode
+suppression to keep command-directory bytes, including ignored caches, unchanged.
+The root adapter suppresses caching before local tooling imports; the generated
+shell invokes the option only with `--check` and disables bytecode there.
 No row proves complete runtime dependencies, forbidden-import policy, responsibility
 separation, semantic sufficiency, efficiency, execution or acceptance authority.
 
