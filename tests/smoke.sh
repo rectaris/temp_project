@@ -1340,6 +1340,8 @@ assert_generated_hook_surfaces "$default_out"
 run_root_python "$root/tests/assert-generated-semantics.py" "$default_out"
 run_root_python "$root/scripts/check-yaml.py" "$default_out" >/dev/null
 (cd "$default_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check)
+run_root_python "$root/tests/fixtures/orchestration/parent-authority-cli.py" \
+  "$default_out/.project-agent-workflow/scripts/parent-authority.py"
 run_root_python - "$default_out/.copier-answers.yml" <<'PY'
 from pathlib import Path
 import sys

@@ -14,6 +14,7 @@ from validation_tools.generated import (
     SecurityStaticCheckTest,
 )
 from validation_tools.plan import PlanOverviewTest, PlanValidationCommandsTest
+from validation_tools.parent_authority import ParentAuthorityTest
 from validation_tools.python_lint import PythonLintTest
 from validation_tools.question_set import CommittedQuestionCasesTest, QuestionSetBuilderTest
 from validation_tools.plan_authoring import PlanAuthoringInRepositoryTest, PlanAuthoringTest

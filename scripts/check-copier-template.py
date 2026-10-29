@@ -712,6 +712,27 @@ def require_referent_first_alignment() -> None:
             fail(f"referent-first root/template files differ: {root_path} != {template_path}")
 
 
+def require_parent_authority_alignment() -> None:
+    """Keep fixed-input custody identical in the root and installed layouts."""
+    for name in ("parent-authority.py", "parent_authority.py", "process_runtime.py"):
+        root_path = f"scripts/{name}" if name == "parent-authority.py" else f"scripts/project_workflow/{name}"
+        template_path = f"template/.project-agent-workflow/scripts/{name}"
+        generated_path = f".project-agent-workflow/scripts/{name}"
+        if SOURCE_REQUIRED.count(root_path) != 1 or SOURCE_REQUIRED.count(template_path) != 1:
+            fail(f"parent authority source must be inventoried exactly once: {name}")
+        if GENERATED_REQUIRED.count(generated_path) != 1:
+            fail(f"parent authority output must be inventoried exactly once: {name}")
+        root_file = ROOT / root_path
+        template_file = ROOT / template_path
+        if root_file.read_bytes() != template_file.read_bytes():
+            fail(f"root and generated parent authority bytes differ: {name}")
+        root_mode = root_file.stat().st_mode & 0o777
+        if root_mode != (template_file.stat().st_mode & 0o777):
+            fail(f"root and generated parent authority modes differ: {name}")
+        if bool(root_mode & 0o111) != (name == "parent-authority.py"):
+            fail(f"parent authority executable role differs: {name}")
+
+
 def require_worker_backend_alignment() -> None:
     """Keep the capability boundary identical in both layouts.
 
@@ -1529,6 +1550,7 @@ PLAN_WORKFLOW_ALIGNED_SECTIONS = (
     "Bounded Descope",
     "Review-Finding Budgets",
     "Successor Backlog Deferral",
+    "Parent-held accepted Git inputs",
 )
 
 PLAN_ADMISSION_CONSTANT_SOURCES = (
@@ -4002,6 +4024,7 @@ def main() -> int:
     require_referent_first_alignment()
     require_opencode_go_transport_alignment()
     require_worker_backend_alignment()
+    require_parent_authority_alignment()
     require_typesafe_root_only()
     require_harness_evaluation_alignment()
     require_harness_profile_alignment()
