@@ -306,4 +306,7 @@ id	path
 392	docs/plan/checked/2026/10/01-15/392-preserve-unassigned-backlog-verification.md
 389	docs/plan/checked/2026/10/01-15/389-report-retained-test-review-acceptance.md
 401	docs/plan/checked/2026/10/16-31/401-publish-explicit-copier-initial-copy-validation.md
+411	docs/plan/checked/2026/10/16-31/411-publish-advisory-python-scope-diagnostics.md
+412	docs/plan/checked/2026/10/16-31/412-correct-public-scope-diagnostic-runtime-boundary.md
 388	docs/plan/checked/2026/10/16-31/388-publish-parent-held-git-input-foundation.md
+413	docs/plan/checked/2026/10/16-31/413-resolve-pr43-public-base-conflicts.md

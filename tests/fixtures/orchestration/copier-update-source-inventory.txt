@@ -26,6 +26,9 @@ template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md
 template/.project-agent-workflow/scripts/check-external-service-policy.py
 template/.project-agent-workflow/scripts/sync-plan-to-linear.sh
 template/.project-agent-workflow/scripts/plan_authoring.py
+template/.project-agent-workflow/scripts/plan_scope_candidates.py
+template/.project-agent-workflow/docs/agent/SPEC_DECISION_AUDIT.md
+template/.project-agent-workflow/scripts/create-plan.sh
 template/.project-agent-workflow/scripts/parent-authority.py
 template/.project-agent-workflow/scripts/parent_authority.py
 template/.project-agent-workflow/scripts/process_runtime.py

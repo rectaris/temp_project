@@ -5,7 +5,7 @@ authoring=.project-agent-workflow/scripts/plan_authoring.py
 lint=.project-agent-workflow/scripts/lint-plan-docs.py
 
 usage() {
-  echo "Usage: $0 --check --input <authoring-input.json>" >&2
+  echo "Usage: $0 --check [--scope-candidates] --input <authoring-input.json>" >&2
   echo "       $0 --input <authoring-input.json>" >&2
   echo "       $0 <active|backlog> <slug> --purpose implementation" >&2
   echo "          --write-scope <path> [--write-scope <path>]..." >&2
@@ -49,9 +49,11 @@ case "$1" in
   --check|--input)
     mode=write
     input=""
+    scope_candidates=0
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --check) mode=check ;;
+        --scope-candidates) scope_candidates=1 ;;
         --input)
           shift
           [ "$#" -gt 0 ] || { usage; exit 2; }
@@ -63,8 +65,12 @@ case "$1" in
     done
     [ -n "$input" ] || { usage; exit 2; }
     if [ "$mode" = "check" ]; then
+      if [ "$scope_candidates" = "1" ]; then
+        exec python3 -B "$authoring" check --profile generated --input "$input" --scope-candidates
+      fi
       exec python3 "$authoring" check --profile generated --input "$input"
     fi
+    [ "$scope_candidates" = "0" ] || { usage; exit 2; }
     render_from_input "$input"
     exit 0
     ;;
